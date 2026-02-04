@@ -1,0 +1,2 @@
+html, body, #root { height: 100%; }
+body { margin: 0; font-family: 'Roboto', Inter, system-ui, Arial, sans-serif; background: #f5f6f8; }

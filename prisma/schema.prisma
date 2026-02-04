@@ -1,0 +1,193 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email        String    @unique @db.VarChar
+  passwordHash String?   @map("password_hash") @db.Text
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  accounts     Account[]
+
+  @@map("users")
+}
+
+// Link account to user relation
+model Account {
+  id                   String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId               String    @map("user_id") @db.Uuid
+  user                 User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  provider             String    @db.VarChar
+  email                String    @unique @db.VarChar
+  encryptedCredentials Bytes     @map("encrypted_credentials") @db.ByteA
+  config               Json?     @default(dbgenerated("'{}'::jsonb")) @db.JsonB
+  createdAt            DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
+  Mailboxes            Mailbox[]
+  messages             Message[]
+
+  @@map("accounts")
+}
+
+model Mailbox {
+  id             String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  account        Account    @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  accountId      String     @map("account_id") @db.Uuid
+  name           String     @db.VarChar
+  path           String     @db.VarChar
+  uidValidity    BigInt?    @map("uid_validity") @db.BigInt
+  lastSyncAt     DateTime?  @map("last_sync_at") @db.Timestamptz(6)
+  flagsMirroring Boolean    @default(true) @map("flags_mirroring")
+  createdAt      DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  messages       Message[]
+  syncState      SyncState?
+
+  @@unique([accountId, path])
+  @@map("mailboxes")
+}
+
+model Message {
+  id           String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  account      Account    @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  accountId    String     @map("account_id") @db.Uuid
+  mailbox      Mailbox    @relation(fields: [mailboxId], references: [id], onDelete: Cascade)
+  mailboxId    String     @map("mailbox_id") @db.Uuid
+  uid          BigInt?    @db.BigInt
+  uidValidity  BigInt?    @map("uid_validity") @db.BigInt
+  messageId    String?    @map("message_id") @db.Text
+  xGmMsgid     Decimal?   @map("x_gm_msgid") @db.Decimal
+  subject      String?    @db.Text
+  fromHeader   Json?      @map("from_header") @db.JsonB
+  toHeader     Json?      @map("to_header") @db.JsonB
+  ccHeader     Json?      @map("cc_header") @db.JsonB
+  bccHeader    Json?      @map("bcc_header") @db.JsonB
+  internalDate DateTime?  @map("internal_date") @db.Timestamptz(6)
+  sizeBytes    Int?       @map("size_bytes")
+  flags        String[]   @default([]) @db.Text
+  raw          Bytes?     @db.ByteA
+  rawPath      String?    @map("raw_path") @db.Text
+  fetchStatus  String?    @map("fetch_status") @db.VarChar
+  // Explicit read flag (in addition to IMAP \"Seen\" flag)
+  read         Boolean    @default(false) @db.Boolean
+  // Archive flag
+  archived     Boolean    @default(false) @db.Boolean
+  createdAt    DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime   @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  versions     MessageVersion[]
+  attachments  Attachment[]
+  aiMetadata   AiMetadata[]
+  embeddings   Embedding[]
+  events       Event[]
+
+  @@unique([mailboxId, uid])
+  @@map("messages")
+}
+
+model MessageVersion {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  messageId String   @map("message_id") @db.Uuid
+  version   Int      @default(1)
+  raw       Bytes?   @db.ByteA
+  rawPath   String?  @map("raw_path") @db.Text
+  reason    String?  @db.VarChar
+  createdBy String?  @map("created_by") @db.VarChar
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@unique([messageId, version])
+  @@map("message_versions")
+}
+
+model Attachment {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  message     Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  messageId   String   @map("message_id") @db.Uuid
+  filename    String?  @db.Text
+  contentType String?  @map("content_type") @db.Text
+  sizeBytes   Int?     @map("size_bytes")
+  contentId   String?  @map("content_id") @db.Text
+  sha256      Bytes?   @db.ByteA
+  storedPath  String?  @map("stored_path") @db.Text
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("attachments")
+}
+
+model AiMetadata {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  message     Message   @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  messageId   String    @map("message_id") @db.Uuid
+  version     Int       @default(1)
+  model       String    @db.VarChar
+  provider    String    @db.VarChar
+  cacheKey    String?   @map("cache_key") @db.Text
+  labels      Json?     @default(dbgenerated("'{}'::jsonb")) @db.JsonB
+  priority    Decimal?  @db.Decimal
+  itinerary   Json?     @db.JsonB
+  tracking    Json?     @db.JsonB
+  events      Json?     @db.JsonB
+  rawResponse Json?     @map("raw_response") @db.JsonB
+  // Short human readable summary generated by an LLM
+  summary     String?   @db.Text
+  // Recommended action (e.g. { type: "reply", details: {...} }) stored as JSON
+  action      Json?     @db.JsonB
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  embeddings  Embedding[]
+  eventsRows  Event[]
+
+  @@unique([messageId, version])
+  @@map("ai_metadata")
+}
+
+model Embedding {
+  id           String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  message      Message?   @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  messageId    String?    @map("message_id") @db.Uuid
+  aiMetadata   AiMetadata? @relation(fields: [aiMetadataId], references: [id], onDelete: Cascade)
+  aiMetadataId String?    @map("ai_metadata_id") @db.Uuid
+  chunkId      Int        @default(0) @map("chunk_id")
+  textSnippet  String?    @map("text_snippet") @db.Text
+  vector       Unsupported("vector(1536)")?
+  provider     String?    @db.VarChar
+  model        String?    @db.VarChar
+  externalId   String?    @map("external_id") @db.Text
+  createdAt    DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("embeddings")
+}
+
+model Event {
+  id           String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  message      Message?   @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  messageId    String?    @map("message_id") @db.Uuid
+  aiMetadata   AiMetadata? @relation(fields: [aiMetadataId], references: [id], onDelete: Cascade)
+  aiMetadataId String?    @map("ai_metadata_id") @db.Uuid
+  startTs      DateTime?  @map("start_ts") @db.Timestamptz(6)
+  endTs        DateTime?  @map("end_ts") @db.Timestamptz(6)
+  summary      String?    @db.Text
+  location     String?    @db.Text
+  attendees    Json?      @db.JsonB
+  source       String?    @db.VarChar
+  createdAt    DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("events")
+}
+
+model SyncState {
+  id                String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  mailbox           Mailbox  @relation(fields: [mailboxId], references: [id], onDelete: Cascade)
+  mailboxId         String   @map("mailbox_id") @db.Uuid
+  lastUid           BigInt?  @map("last_uid") @db.BigInt
+  lastModseq        Decimal? @map("last_modseq") @db.Decimal
+  lastSeenHistoryId String?  @map("last_seen_history_id") @db.Text
+  lastCheckedAt     DateTime? @map("last_checked_at") @db.Timestamptz(6)
+
+  @@unique([mailboxId])
+  @@map("sync_state")
+}

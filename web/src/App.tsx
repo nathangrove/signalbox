@@ -1,0 +1,160 @@
+import React, { useState } from 'react'
+import Login from './pages/Login'
+import Mail from './pages/Mail'
+import Dashboard from './pages/Dashboard'
+import { initSocket, getSocket } from './socket'
+import { getMessage } from './api'
+import AppBar from '@mui/material/AppBar'
+import Toolbar from '@mui/material/Toolbar'
+import Typography from '@mui/material/Typography'
+import Container from '@mui/material/Container'
+import Button from '@mui/material/Button'
+import IconButton from '@mui/material/IconButton'
+import Menu from '@mui/material/Menu'
+import MenuItem from '@mui/material/MenuItem'
+import Dialog from '@mui/material/Dialog'
+import DialogTitle from '@mui/material/DialogTitle'
+import DialogContent from '@mui/material/DialogContent'
+import SettingsIcon from '@mui/icons-material/Settings'
+import Accounts from './pages/Accounts'
+
+export default function App(){
+  const [loggedIn, setLoggedIn] = useState(!!localStorage.getItem('access_token'))
+  const [page, setPage] = useState<'mail'|'dashboard'>('mail')
+  const [settingsAnchor, setSettingsAnchor] = useState<null | HTMLElement>(null)
+  const [openAccounts, setOpenAccounts] = useState(false)
+
+  // initialize socket and desktop notifications when logged in
+  React.useEffect(() => {
+    if (!loggedIn) return;
+    const socket = initSocket();
+
+    function showDesktopNotification(title: string, body?: string, data?: any) {
+      try {
+        if (Notification.permission === 'default') {
+          Notification.requestPermission();
+        }
+        if (Notification.permission === 'granted') {
+          const n = new Notification(title, { body: body || undefined });
+          n.onclick = () => {
+            window.focus();
+            try {
+              // dispatch a custom event so Mail component can open the specific message
+              if (data && data.messageId) {
+                window.dispatchEvent(new CustomEvent('openMessage', { detail: { messageId: data.messageId, mailboxId: data.mailboxId } }));
+              } else {
+                // fallback: navigate to mail view
+                window.location.hash = '#/';
+              }
+            } catch (_) {
+              window.location.hash = '#/';
+            }
+          };
+        }
+      } catch (e) {
+        console.warn('desktop notification failed', e);
+      }
+    }
+
+    const onMessageCreated = (payload: any) => {
+      (async () => {
+        try {
+          if (!payload || !payload.messageId) return;
+
+          // Try to fetch message (and ai labels) a few times since classification may be async
+          let msg: any = null;
+          const attempts = [0, 2000, 5000];
+          for (let i = 0; i < attempts.length; i++) {
+            try {
+              msg = await getMessage(payload.messageId);
+            } catch (_) { msg = null }
+            if (msg && (msg.category || typeof msg.spam !== 'undefined')) break;
+            await new Promise(res => setTimeout(res, attempts[i]));
+          }
+
+          // If we couldn't determine category/spam, skip notification
+          if (!msg) return;
+          const category = (msg.category || '').toLowerCase();
+          const spam = !!msg.spam;
+          if (spam) return;
+          if (category !== 'primary' && category !== 'updates') return;
+
+          const title = payload.subject || msg.subject || 'New message';
+          const from = payload.from ? (payload.from.name || payload.from.address || '') : (msg.fromHeader ? (Array.isArray(msg.fromHeader) && msg.fromHeader[0] ? (msg.fromHeader[0].name || msg.fromHeader[0].address) : '') : '');
+          showDesktopNotification(title, from, { messageId: payload.messageId, mailboxId: payload.mailboxId });
+        } catch (e) { console.warn('message.created handler error', e); }
+      })();
+    };
+
+    socket.on('message.created', onMessageCreated);
+
+    // Prompt for notification permission on first login and show welcome when granted
+    try {
+      if ('Notification' in window) {
+        if (Notification.permission === 'default') {
+          Notification.requestPermission().then(p => {
+            if (p === 'granted') {
+              showDesktopNotification('Welcome to Webmail AI', 'Notifications enabled — you will receive new message alerts.');
+            }
+          }).catch(() => {});
+        }
+      }
+    } catch (e) {
+      console.warn('notification permission prompt failed', e);
+    }
+
+    return () => {
+      try { socket.off('message.created', onMessageCreated); } catch (_) {}
+    };
+  }, [loggedIn]);
+
+  function onLogin(){ setLoggedIn(true) }
+  function logout(){ localStorage.removeItem('access_token'); setLoggedIn(false) }
+
+  function openSettingsMenu(e: React.MouseEvent<HTMLElement>) { setSettingsAnchor(e.currentTarget) }
+  function closeSettingsMenu() { setSettingsAnchor(null) }
+  function handleOpenAccounts() { closeSettingsMenu(); setOpenAccounts(true) }
+  function handleCloseAccounts() { setOpenAccounts(false) }
+
+  return (
+    <div>
+      <AppBar position="static">
+        <Toolbar>
+          <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
+            Webmail AI
+          </Typography>
+          {loggedIn && (
+            <>
+              <Button color={page === 'mail' ? 'inherit' : 'secondary'} onClick={() => setPage('mail')}>Mail</Button>
+              <Button color={page === 'dashboard' ? 'inherit' : 'secondary'} onClick={() => setPage('dashboard')}>Dashboard</Button>
+              <IconButton color="inherit" onClick={openSettingsMenu} size="small">
+                <SettingsIcon />
+              </IconButton>
+              <Menu
+                anchorEl={settingsAnchor}
+                open={Boolean(settingsAnchor)}
+                onClose={closeSettingsMenu}
+                anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+                transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+              >
+                <MenuItem onClick={handleOpenAccounts}>Accounts</MenuItem>
+                <MenuItem onClick={() => { closeSettingsMenu(); /* placeholder for other settings */ }}>Preferences</MenuItem>
+                <MenuItem onClick={() => { closeSettingsMenu(); logout(); }}>Logout</MenuItem>
+              </Menu>
+            </>
+          )}
+        </Toolbar>
+      </AppBar>
+
+      <Dialog open={openAccounts} onClose={handleCloseAccounts} maxWidth="md" fullWidth>
+        <DialogTitle>Accounts</DialogTitle>
+        <DialogContent>
+          <Accounts />
+        </DialogContent>
+      </Dialog>
+      <Container sx={{ mt: 4, maxWidth: 'xl' }}>
+        {loggedIn ? (page === 'mail' ? <Mail /> : <Dashboard />) : <Login onLogin={onLogin} />}
+      </Container>
+    </div>
+  )
+}

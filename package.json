@@ -1,0 +1,18 @@
+{
+  "name": "webmail-workspace",
+  "private": true,
+  "workspaces": [
+    "server",
+    "web"
+  ],
+  "scripts": {
+    "dev:server": "npm --workspace server run start:dev",
+    "dev:web": "npm --workspace web run dev",
+    "dev:worker": "npm --workspace server run worker",
+    "dev": "concurrently \"npm run dev:server\" \"npm run dev:web\" \"npm run dev:worker\"",
+    "bootstrap": "npm install --workspaces"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.0"
+  }
+}
