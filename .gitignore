@@ -16,7 +16,7 @@ pids
 node_modules/
 
 # Build output
-/dist/
+dist/
 /build/
 /out/
 /.next/
@@ -53,3 +53,5 @@ prisma/migrations/*/migration_lock.toml
 
 # Local caches
 .cache/
+.pgdata/
+.miniodata/

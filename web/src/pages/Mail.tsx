@@ -6,6 +6,9 @@ import { initSocket } from '../socket'
 import Box from '@mui/material/Box'
 import Paper from '@mui/material/Paper'
 import Typography from '@mui/material/Typography'
+import FormControl from '@mui/material/FormControl'
+import InputLabel from '@mui/material/InputLabel'
+import Select from '@mui/material/Select'
 import List from '@mui/material/List'
 import ListSubheader from '@mui/material/ListSubheader'
 import ListItemButton from '@mui/material/ListItemButton'
@@ -45,6 +48,45 @@ function formatFrom(fromHeader: any): string {
   if (!list.length) return 'Unknown sender'
   const first = list[0]
   return first.name ? `${first.name} <${first.address}>` : first.address
+}
+
+function formatRecipients(toHeader: any): string {
+  try {
+    if (!toHeader) return ''
+    const list = Array.isArray(toHeader) ? toHeader : (typeof toHeader === 'string' ? [toHeader] : [])
+    const parts = list.map((t: any) => {
+      if (!t) return ''
+      if (typeof t === 'string') return t
+      return t.name ? `${t.name} <${t.address}>` : (t.address || '')
+    }).filter(Boolean)
+    if (!parts.length) return ''
+    const joined = parts.join(', ')
+    return joined.length > 80 ? joined.slice(0, 77) + '...' : joined
+  } catch (_) {
+    return ''
+  }
+}
+
+function formatRecipientsElements(toHeader: any) {
+  try {
+    const list = Array.isArray(toHeader) ? toHeader : (typeof toHeader === 'string' ? [{ address: toHeader }] : [])
+    const nodes = list.map((t: any, idx: number) => {
+      const email = typeof t === 'string' ? t : (t.address || '')
+      const name = typeof t === 'string' ? '' : (t.name || '')
+      const display = name ? name : email
+      return (
+        <React.Fragment key={idx}>
+          <Tooltip title={email} arrow>
+            <span style={{ fontWeight: 500 }}>{display}</span>
+          </Tooltip>
+          {idx < list.length - 1 ? ', ' : ''}
+        </React.Fragment>
+      )
+    })
+    return <>{nodes}</>
+  } catch (_) {
+    return null
+  }
 }
 
 function getSenderAddress(fromHeader: any): string | null {
@@ -486,6 +528,7 @@ function savePrefs<T>(key: string, value: T) {
 
 export default function Mail(){
   const [accounts, setAccounts] = useState<any[]>([])
+  const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null)
   const [mailboxes, setMailboxes] = useState<any[]>([])
   const [messages, setMessages] = useState<any[]>([])
   const [selectedMailbox, setSelectedMailbox] = useState<any | null>(null)
@@ -513,7 +556,9 @@ export default function Mail(){
   useEffect(() => {
     (async()=>{
       const accs = await getAccounts()
-      setAccounts(Array.isArray(accs) ? accs : [])
+      const list = Array.isArray(accs) ? accs : []
+      setAccounts(list)
+      if (list.length) setSelectedAccountId(list[0].id || null)
     })()
   },[])
 
@@ -523,7 +568,8 @@ export default function Mail(){
       try{
         const data = await getMailboxes()
         setMailboxes(Array.isArray(data) ? data : [])
-        if (data && data.length) setSelectedMailbox(data[0])
+        // mailbox selection deferred to initial route sync effect so we can prefer
+        // a mailbox matching the selected account when available
       } finally {
         setLoadingBoxes(false)
       }
@@ -557,17 +603,23 @@ export default function Mail(){
     try { window.history.pushState({}, '', path) } catch (_) { window.location.hash = path }
   }
 
-  // initial route sync when mailboxes are loaded
+  // initial route sync when mailboxes are loaded; prefer selected account's mailbox
   useEffect(() => {
     if (!mailboxes || !mailboxes.length) return
     const { mailboxId, category } = parseRoute()
     if (mailboxId) {
       const mb = mailboxes.find(b => b.id === mailboxId)
       if (mb) setSelectedMailbox(mb)
+    } else if (selectedAccountId) {
+      const mb = mailboxes.find(b => b.accountId === selectedAccountId)
+      if (mb) setSelectedMailbox(mb)
+      else setSelectedMailbox(mailboxes[0])
+    } else {
+      setSelectedMailbox(mailboxes[0])
     }
     // do not default to a category; respect route or leave null for all
     setSelectedCategory(category || null)
-  }, [mailboxes])
+  }, [mailboxes, selectedAccountId])
 
   // handle browser back/forward
   useEffect(() => {
@@ -594,8 +646,9 @@ export default function Mail(){
         const data = await getMessages(selectedMailbox.id, pageSize, 0, debouncedSearch, selectedCategory || undefined)
         const list = Array.isArray(data) ? data : []
         setMessages(list)
-        // select first message by default
-        setSelectedMessage(list.length ? list[0] : null)
+        // do not auto-select a message when a folder is first selected — leave preview empty
+        setSelectedMessage(null)
+        setMessageDetail(null)
         setOffset(list.length)
         setHasMore(list.length === pageSize)
       } finally {
@@ -748,6 +801,14 @@ export default function Mail(){
     }
     return groups
   }, [mailboxes])
+
+  // If an account is selected, only show that account's mailbox group
+  const mailboxGroups = useMemo(() => {
+    if (!selectedAccountId) return Object.entries(groupedMailboxes)
+    const acc = accounts.find(a => a.id === selectedAccountId)
+    if (!acc) return Object.entries(groupedMailboxes)
+    return Object.entries(groupedMailboxes).filter(([email]) => email === acc.email)
+  }, [groupedMailboxes, selectedAccountId, accounts])
 
   // Group messages by date for list view: today, yesterday, past 7 days, older
   const groupedMessagesByDate = useMemo(() => {
@@ -1079,11 +1140,50 @@ export default function Mail(){
   return (
     <Box sx={{ display: 'grid', gridTemplateColumns: '260px 360px 1fr', gap: 2, height: 'calc(100vh - 112px)' }}>
       <Paper sx={{ p: 1.5, overflow: 'auto' }}>
+        <FormControl fullWidth size="small" sx={{ mb: 1 }}>
+          <InputLabel id="account-select-label">Account</InputLabel>
+          <Select
+            labelId="account-select-label"
+            value={selectedAccountId || ''}
+            label="Account"
+            onChange={(e: any) => {
+              const val = e.target.value || null
+              setSelectedAccountId(val)
+              // when switching accounts: choose the first mailbox for that account
+              // and default to the "All" folder (category=null). Also clear preview.
+              if (val) {
+                const acc = accounts.find(a => a.id === val)
+                if (acc) {
+                  const firstBox = mailboxes.find(b => b.accountId === acc.id)
+                  if (firstBox) {
+                    setSelectedMailbox(firstBox)
+                    setSelectedCategory(null)
+                    setSelectedMessage(null)
+                    setMessageDetail(null)
+                    try { replaceRoute(firstBox.id, null) } catch (_) {}
+                  }
+                }
+              } else {
+                // show all accounts: clear selection and preview
+                setSelectedMailbox(null)
+                setSelectedCategory(null)
+                setSelectedMessage(null)
+                setMessageDetail(null)
+                try { replaceRoute(null, null) } catch (_) {}
+              }
+            }}
+          >
+            <MenuItem value="">All accounts</MenuItem>
+            {accounts.map(a => (
+              <MenuItem key={a.id} value={a.id}>{a.email}</MenuItem>
+            ))}
+          </Select>
+        </FormControl>
         <Typography variant="subtitle2" sx={{ mb: 1, color: 'text.secondary' }}>Folders</Typography>
         {loadingBoxes ? <CircularProgress size={24} /> : (
           <List dense subheader={<li />}
             sx={{ '& .MuiListSubheader-root': { bgcolor: 'transparent', fontWeight: 600 } }}>
-            {Object.entries(groupedMailboxes).map(([accountEmail, boxes]) => (
+            {mailboxGroups.map(([accountEmail, boxes]) => (
               <li key={accountEmail}>
                 <ul style={{ padding: 0 }}>
                   <ListSubheader>{accountEmail}</ListSubheader>
@@ -1209,6 +1309,10 @@ export default function Mail(){
                                 <span>
                                   {formatFrom(msg.fromHeader)}
                                   <br />
+                                  {(msg.toHeader || msg.to) ? (
+                                    <span style={{ color: 'rgba(0,0,0,0.6)' }}>To: {formatRecipientsElements(msg.toHeader || msg.to)}</span>
+                                  ) : null}
+                                  {(msg.toHeader || msg.to) ? <br /> : null}
                                   {formatDate(msg.internalDate)}
                                 </span>
                               }

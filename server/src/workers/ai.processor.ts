@@ -2,7 +2,7 @@ import { WorkerOptions } from 'bullmq';
 import { PrismaService } from '../prisma/prisma.service';
 import { simpleParser } from 'mailparser';
 import { Readable } from 'stream';
-
+// Inline prompts (previously in ai.prompts.ts) so we can remove that file
 export const CATEGORIES = {
   primary: {
     prompt: 'things that need a response or action from me',
@@ -34,6 +34,54 @@ export const CATEGORIES = {
     heuristicKeywords: [],
     summarize: false
   }
+};
+
+export const CLASSIFY_SYSTEM_PROMPT = 'You are an email classifier. Return JSON only.';
+
+export function buildClassifierUserPrompt(input: { subject: string; from: string; body: string }): string {
+  return (
+    // concat the categories <category> (<prompt>) with commas
+    `Classify this email into one of: ${Object.keys(CATEGORIES)
+      .map((key) => `${key} (${CATEGORIES[key as keyof typeof CATEGORIES]?.prompt})`)
+      .join(', ')}. Also set spam true/false. Determine cold true/false (whether this is a cold email).\n\n` +
+    'Also set spam true/false. Determine cold true/false (whether this is a cold email). Give a one sentance reason for why you chose this category.\n\n' +
+    'If there is bad grammer or the text looks obfuscated with random characters or non-english characters, it is likely spam. Links that look obfuscated does not necessarily mean spam.\n\n' +
+    'Respond with a single JSON object with the most likely category: {"category":"...","spam":true|false,"confidence":0..1,"cold":true|false,"reason": "..."}.\n\n' +
+    `Subject: ${input.subject}\nFrom: ${input.from}\nBody: ${input.body}`
+  );
+}
+
+export function buildClassifierMessages(input: { subject: string; from: string; body: string }) {
+  return [
+    {
+      role: 'system',
+      content: CLASSIFY_SYSTEM_PROMPT
+    },
+    {
+      role: 'user',
+      content: buildClassifierUserPrompt(input)
+    }
+  ];
+}
+
+export const SUMMARY_SYSTEM_PROMPT =
+  'You are an assistant that reads an email and returns a short (1-2 sentence) summary, a single recommended action if appropriate, any calendar event(s), and shipment tracking information. Return JSON only. Tracking must be for shipments only (carriers like Amazon, UPS, USPS, FedEx, DHL). Do not treat marketing/analytics link tracking parameters as shipment tracking.';
+
+export function buildSummaryUserPrompt(input: { subject: string; from: string; body: string }): string {
+  return (
+    `Return a single JSON object only: {"summary":"...","action":{"type":"reply"|"click_link"|"mark_read"|"archive"|"flag"|"none","reason":"...","details":{}}, "confidence":0..1, "events":[{"summary":"..","start":"ISO8601","end":"ISO8601","location":"...","attendees":["name <email>"]}], "tracking":[{"carrier":"AMAZON|UPS|USPS|FEDEX|DHL|OTHER","trackingNumber":"...","url":"...","status":"...","deliveryDate":"ISO8601"} ] }.
+
+` +
+    'Tracking entries must be for shipments only. Do NOT add tracking items for links that merely include tracking parameters (utm_*, ref=, clickId, etc.). If no events or shipment tracking items are found, return empty arrays for those keys.\n\n' +
+    `Email:\nSubject: ${input.subject}\nFrom: ${input.from}\nBody: ${input.body}`
+  );
+}
+
+export function buildSummaryMessages(input: { subject: string; from: string; body: string }) {
+  return [
+    { role: 'system', content: SUMMARY_SYSTEM_PROMPT },
+    { role: 'user', content: buildSummaryUserPrompt(input) }
+  ];
 }
 function formatFrom(fromHeader: any): string {
   try {
@@ -105,28 +153,13 @@ function extractJson(text: string): any | null {
   return null;
 }
 
-async function classifyWithLLM(input: { subject: string; from: string; body: string }) {
+async function classifyWithLLM(input: { subject: string; from: string; body: string }, messagesOverride?: any[], modelOverride?: string) {
   const base = (process.env.OPENAI_API_BASE || 'https://api.openai.com/v1').replace(/\/$/, '');
   const url = `${base}/chat/completions`;
-  const model = process.env.OPENAI_PARSE_MODEL || 'gpt-4o-mini';
+  const model = modelOverride || process.env.OPENAI_PARSE_MODEL || 'gpt-4o-mini';
   const apiKey = process.env.OPENAI_API_KEY;
 
-  const messages = [
-    {
-      role: 'system',
-      content: 'You are an email classifier. Return JSON only.'
-    },
-    {
-      role: 'user',
-      content:
-      // concat the categories <category> (<prompt>) with commas
-        `Classify this email into one of: ${Object.keys(CATEGORIES).map( key => `${key} (${CATEGORIES[key as keyof typeof CATEGORIES]?.prompt})`).join(', ')}. Also set spam true/false. Determine cold true/false (whether this is a cold email).\n\n` +
-        'Also set spam true/false. Determine cold true/false (whether this is a cold email). Give a one sentance reason for why you chose this category.\n\n' +
-        'If there is bad grammer or the text looks obfuscated with random characters or non-english characters, it is likely spam.\n\n' +
-        'Respond with a single JSON object with the most likely category: {"category":"...","spam":true|false,"confidence":0..1,"cold":true|false,"reason": "..."}.\n\n' +
-        `Subject: ${input.subject}\nFrom: ${input.from}\nBody: ${input.body}`
-    }
-  ];
+  const messages = messagesOverride && Array.isArray(messagesOverride) && messagesOverride.length ? messagesOverride : buildClassifierMessages(input);
 
   console.log(`[ai] classifyWithLLM calling model=${model} url=${url}`);
   let res;
@@ -171,21 +204,244 @@ async function classifyWithLLM(input: { subject: string; from: string; body: str
 }
 
 const OPENAI_REQUEST_TIMEOUT_MS = Number(process.env.OPENAI_REQUEST_TIMEOUT_MS || 60 * 1000);
+const OPENAI_MAX_RETRIES = Number(process.env.OPENAI_MAX_RETRIES || 2);
+const OPENAI_RETRY_BASE_MS = Number(process.env.OPENAI_RETRY_BASE_MS || 1000);
+
+function isRetryableError(err: any) {
+  if (!err) return false;
+  const name = String(err.name || '').toLowerCase();
+  const code = String((err && err.code) || '').toLowerCase();
+  // undici / fetch aborts present as AbortError (DOMException)
+  if (name === 'aborterror' || name === 'domexception') return true;
+  if (name === 'fetcherror') return true;
+  // common network error codes
+  if (['econnreset', 'etimedout', 'eai_again', 'enotfound'].includes(code)) return true;
+  return false;
+}
 
 async function fetchWithTimeout(url: string, opts: any = {}, timeoutMs = OPENAI_REQUEST_TIMEOUT_MS) {
-  const controller = new AbortController();
-  const id = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const res = await fetch(url, Object.assign({}, opts, { signal: controller.signal }));
-    return res;
-  } finally {
-    clearTimeout(id);
+  let attempt = 0;
+  while (true) {
+    attempt++;
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(url, Object.assign({}, opts, { signal: controller.signal }));
+      return res;
+    } catch (err) {
+      // If not retryable or we've exhausted retries, rethrow
+      if (attempt > OPENAI_MAX_RETRIES || !isRetryableError(err)) {
+        console.error(`[ai] fetchWithTimeout final failure attempt=${attempt} url=${url} error=`, err);
+        throw err;
+      }
+      const backoff = OPENAI_RETRY_BASE_MS * Math.pow(2, attempt - 1);
+      console.warn(`[ai] fetchWithTimeout attempt=${attempt} failed, retrying after ${backoff}ms`, (err as any)?.name || String(err));
+      await new Promise((r) => setTimeout(r, backoff));
+    } finally {
+      clearTimeout(id);
+    }
   }
 }
 
 export const aiJobProcessor = async (job: any) => {
   const prisma = new PrismaService();
   try {
+    // Handle generate-candidates jobs dispatched from admin
+    if (job.name === 'generate-candidates') {
+      const { promptId, count = 3, model } = job.data || {};
+      console.log(`[ai-gen] job.start id=${job.id} promptId=${promptId} count=${count} model=${model}`);
+      if (!promptId) throw new Error('promptId required');
+      // Load prompt
+      const prompt = await prisma.aiPrompt.findUnique({ where: { id: promptId } });
+      if (!prompt) throw new Error('prompt not found');
+
+      // Build a simple instruction to the LLM to return an array of candidate message sets
+      const baseSystem = (prompt.systemMessages && Array.isArray(prompt.systemMessages)) ? prompt.systemMessages : [];
+      const baseUser = (prompt.userMessages && Array.isArray(prompt.userMessages)) ? prompt.userMessages : [];
+      const genModel = model || process.env.OPENAI_PROMPT_GEN_MODEL || process.env.OPENAI_MODEL || 'gpt-4o-mini';
+
+      const genMessages = [
+        { role: 'system', content: 'You are a helpful prompt engineer. Given a base user prompt, generate concise alternative user message payloads that preserve intent but vary phrasing and structure. Output a JSON array of candidates. Each candidate should be an object with a `messages` field which is an array of message objects with `role` and `content`. Example output: [{"messages":[{"role":"user","content":"..."}]}]. Do not output additional text.' },
+        { role: 'user', content: `Base user messages: ${JSON.stringify(baseUser)}\nGenerate ${count} distinct candidates.` }
+      ];
+
+      let genRes: any = null;
+      try {
+        console.log(`[ai-gen] calling model=${genModel}`);
+        const base = (process.env.OPENAI_API_BASE || 'https://api.openai.com/v1').replace(/\/$/, '');
+        const url = `${base}/chat/completions`;
+        const apiKey = process.env.OPENAI_API_KEY;
+        const resp = await fetchWithTimeout(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) },
+          body: JSON.stringify({ model: genModel, messages: genMessages, temperature: 0.8, max_tokens: 1200 })
+        }, OPENAI_REQUEST_TIMEOUT_MS);
+        const txt = await resp.text();
+        if (!resp.ok) {
+          console.error('[ai-gen] non-ok response', resp.status, txt.slice(0,1000));
+          throw new Error('LLM generation failed');
+        }
+        const parsed = (() => { try { return JSON.parse(txt); } catch (_) { return null; } })();
+        const content = (parsed as any)?.choices?.[0]?.message?.content || txt;
+        // attempt to extract JSON array
+        const arr = extractJson(content);
+        genRes = arr || (() => { try { return JSON.parse(String(content).trim()); } catch (_) { return null; } })();
+      } catch (e: any) {
+        console.warn('[ai-gen] generation failed', (e as any)?.message || e);
+      }
+
+      const created: any[] = [];
+      if (Array.isArray(genRes)) {
+        for (const cand of (genRes as any[]).slice(0, count)) {
+          try {
+            const messages = (cand && (cand as any).messages) || cand || prompt.userMessages;
+            // skip if an identical candidate already exists for this prompt
+            const exists = await prisma.aiPromptCandidate.findFirst({ where: { promptId: promptId, messages: messages as any } as any });
+            if (exists) {
+              console.log('[ai-gen] skipping duplicate candidate for prompt', promptId, 'existingId=', exists.id);
+              continue;
+            }
+            const createdRow = await prisma.aiPromptCandidate.create({ data: {
+              promptId: promptId,
+              messages: messages as any,
+              source: 'auto',
+              model: genModel,
+              params: { generatedBy: 'llm' } as any,
+              status: 'draft'
+            } });
+            created.push(createdRow);
+          } catch (e) {
+            console.warn('[ai-gen] failed to insert candidate', (e as any)?.message || e);
+          }
+        }
+      } else {
+        // fallback: create placeholders using base user messages, but skip if duplicates exist
+        for (let i = 0; i < (count || 1); i++) {
+          const candidateMessages = prompt.userMessages as any;
+          const exists = await prisma.aiPromptCandidate.findFirst({ where: { promptId: promptId, messages: candidateMessages } as any });
+          if (exists) {
+            console.log('[ai-gen] skipping duplicate fallback candidate for prompt', promptId, 'existingId=', exists.id);
+            continue;
+          }
+          const c = await prisma.aiPromptCandidate.create({ data: {
+            promptId: promptId,
+            messages: candidateMessages,
+            source: 'auto',
+            model: genModel,
+            params: {} as any,
+            status: 'draft'
+          } });
+          created.push(c);
+        }
+      }
+
+      console.log(`[ai-gen] job.complete created=${created.length}`);
+      return { ok: true, created: created.length };
+    }
+
+    // Handle offline evaluation jobs for prompts
+    if (job.name === 'evaluate-prompt') {
+      const { promptId, sampleSize = 0, model } = job.data || {};
+      console.log(`[ai-eval] job.start id=${job.id} promptId=${promptId} sampleSize=${sampleSize} model=${model}`);
+      if (!promptId) throw new Error('promptId required');
+      const prompt = await prisma.aiPrompt.findUnique({ where: { id: promptId } });
+      if (!prompt) throw new Error('prompt not found');
+
+      const candidates = await prisma.aiPromptCandidate.findMany({ where: { promptId } });
+
+      // pull ai metadata rows with associated messages as evaluation set
+      const metaRows = await prisma.aiMetadata.findMany({ include: { message: true }, take: sampleSize || undefined });
+      console.log(`[ai-eval] found ${metaRows.length} ai_metadata rows to evaluate`);
+
+      const evalResults: any[] = [];
+      const evalModel = model || process.env.OPENAI_EVAL_MODEL || process.env.OPENAI_MODEL || 'gpt-4o-mini';
+
+      for (const meta of metaRows) {
+        try {
+          const msg = meta.message as any;
+          const subject = msg?.subject || '';
+          const from = formatFrom(msg?.fromHeader);
+          let body = '';
+          if (msg?.raw) {
+            try {
+              const rawBuf = Buffer.isBuffer(msg.raw) ? msg.raw : Buffer.from(msg.raw as Uint8Array);
+              const parsed = await simpleParser(Readable.from(rawBuf));
+              body = (parsed.text || '').slice(0, 4000);
+            } catch (e) { body = '' }
+          }
+
+          const ground = (meta.userLabels && Object.keys(meta.userLabels || {}).length) ? meta.userLabels : meta.labels;
+
+          for (const cand of candidates) {
+            const start = Date.now();
+            // build messages: use prompt.systemMessages + candidate.messages
+            const systemMsgs = Array.isArray(prompt.systemMessages) ? prompt.systemMessages : [];
+            const candMsgs = Array.isArray(cand.messages) ? cand.messages : [];
+            // render placeholders in candidate messages
+            const rendered = candMsgs.map((m: any) => ({ role: m.role, content: String(m.content || '').replace(/\{\{subject\}\}/g, subject).replace(/\{\{from\}\}/g, from).replace(/\{\{body\}\}/g, body) }));
+            const messages = [...systemMsgs, ...rendered];
+
+            let parsedLabels: any = null;
+            let rawResponse: any = null;
+            try {
+              if (!process.env.OPENAI_API_KEY) {
+                // no API key: fallback to using existing labels as parsed result
+                parsedLabels = meta.labels;
+                rawResponse = { fallback: true };
+              } else {
+                const base = (process.env.OPENAI_API_BASE || 'https://api.openai.com/v1').replace(/\/$/, '');
+                const url = `${base}/chat/completions`;
+                const apiKey = process.env.OPENAI_API_KEY;
+                const resp = await fetchWithTimeout(url, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json', ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) },
+                  body: JSON.stringify({ model: evalModel, messages, temperature: 0.1 })
+                }, OPENAI_REQUEST_TIMEOUT_MS);
+                const txt = await resp.text();
+                rawResponse = txt;
+                if (!resp.ok) {
+                  console.warn('[ai-eval] non-ok response for message', resp.status);
+                }
+                const parsed = extractJson(txt) || (() => { try { return JSON.parse(String(txt).trim()); } catch (_) { return null; } })();
+                parsedLabels = parsed || null;
+              }
+            } catch (e) {
+              console.warn('[ai-eval] candidate eval failed', (e as any)?.message || e);
+            }
+
+            // compute match against ground truth (simple equality on category & spam)
+            const p: any = parsedLabels as any;
+            const g: any = ground as any;
+            const match = p && g && (String(p.category || '').toLowerCase() === String(g.category || '').toLowerCase()) && (Boolean(p.spam) === Boolean(g.spam));
+            const score = typeof p?.confidence === 'number' ? Number(p.confidence) : (match ? 1 : 0);
+            const latencyMs = Date.now() - start;
+
+            // persist run
+            try {
+              await prisma.aiPromptRun.create({ data: {
+                candidateId: cand.id,
+                messageId: meta.messageId,
+                rawResponse: rawResponse as any,
+                parsedLabels: parsedLabels as any,
+                userLabels: ground as any,
+                match: !!match,
+                score: score as any,
+                latencyMs,
+                assignedAt: new Date()
+              } });
+            } catch (e) {
+              console.warn('[ai-eval] failed to write run', (e as any)?.message || e);
+            }
+          }
+        } catch (e) {
+          console.warn('[ai-eval] error evaluating metadata row', (e as any)?.message || e);
+        }
+      }
+
+      console.log(`[ai-eval] job.complete`);
+      return { ok: true };
+    }
+
     const { messageId, aiMetadataId } = job.data || {};
     console.log(`[ai] job.start id=${job.id} messageId=${messageId} aiMetadataId=${aiMetadataId}`);
 
@@ -225,8 +481,24 @@ export const aiJobProcessor = async (job: any) => {
 
     let result = null;
     try {
-      console.log(`[ai] job.${job.id} calling LLM classifyWithLLM model=${process.env.OPENAI_MODEL || 'gpt-4o-mini'}`);
-      result = await classifyWithLLM({ subject, from, body });
+      console.log(`[ai] job.${job.id} calling LLM classifyWithLLM model=${process.env.OPENAI_MODEL ?? 'gpt-4o-mini'}`);
+
+      // attempt to load a DB prompt for classification if available
+      let classifierPrompt: any = null;
+      try {
+        classifierPrompt = await prisma.aiPrompt.findFirst({ where: { active: true, name: { contains: 'classifier' } } });
+      } catch (e) { classifierPrompt = null; }
+
+      if (classifierPrompt) {
+        const systemMsgs = Array.isArray(classifierPrompt.systemMessages) ? classifierPrompt.systemMessages : [];
+        const userMsgs = Array.isArray(classifierPrompt.userMessages) ? classifierPrompt.userMessages : [];
+        const rendered = userMsgs.map((m: any) => ({ role: m.role, content: String(m.content || '').replace(/\{\{subject\}\}/g, subject).replace(/\{\{from\}\}/g, from).replace(/\{\{body\}\}/g, body) }));
+        const messages = [...systemMsgs, ...rendered];
+        result = await classifyWithLLM({ subject, from, body }, messages);
+      } else {
+        result = await classifyWithLLM({ subject, from, body });
+      }
+
       console.log(`[ai] job.${job.id} LLM result=${JSON.stringify(result).slice(0,1000)}`);
     } catch (llmErr) {
       console.warn(`[ai] job.${job.id} LLM failed, falling back to heuristic`, llmErr);
@@ -250,6 +522,11 @@ export const aiJobProcessor = async (job: any) => {
     await prisma.$queryRaw`
       UPDATE ai_metadata
       SET labels = ${JSON.stringify(labels)}::jsonb,
+          summary = NULL,
+          action = NULL,
+          itinerary = NULL,
+          tracking = NULL,
+          events = NULL,
           model = ${process.env.OPENAI_MODEL || 'gpt-4o-mini'},
           provider = ${process.env.OPENAI_API_BASE ? 'openai-compatible' : 'openai'},
           raw_response = ${JSON.stringify(result)}::jsonb
@@ -290,14 +567,8 @@ async function summarizeAndActionWithLLM(input: { subject: string; from: string;
   const model = process.env.OPENAI_SUMMARY_MODEL || 'gpt-4o-mini';
   const apiKey = process.env.OPENAI_API_KEY;
 
-  const messages = [
-    { role: 'system', content: 'You are an assistant that reads an email and returns a short (1-2 sentence) summary, a single recommended action if appropriate, any calendar event(s), and shipment tracking information. Return JSON only.' },
-    { role: 'user', content: `Return a single JSON object only: {"summary":"...","action":{"type":"reply"|"click_link"|"mark_read"|"archive"|"flag"|"none","reason":"...","details":{}}, "confidence":0..1, "events":[{"summary":"..","start":"ISO8601","end":"ISO8601","location":"...","attendees":["name <email>"]}], "tracking":[{"carrier":"AMAZON|UPS|USPS|FEDEX|DHL|OTHER","trackingNumber":"...","url":"...","status":"...","deliveryDate":"ISO8601"}] }.
-
-If no events or tracking items are found, return empty arrays for those keys.
-
-Email:\nSubject: ${input.subject}\nFrom: ${input.from}\nBody: ${input.body}` }
-  ];
+  // If caller provided a pre-built messages array on the input object, use it
+  const messages = (input as any).__messages || buildSummaryMessages(input);
 
   console.log('[ai] summarizeAndActionWithLLM calling model=%s url=%s', model, url);
   let res;
@@ -371,7 +642,21 @@ async function runSummaryAction(prisma: PrismaService, messageId: string, aiMeta
 
   let result = null;
   try {
-    result = await summarizeAndActionWithLLM({ subject, from, body });
+    // attempt to load a DB prompt for summary if available
+    let summaryPrompt: any = null;
+    try {
+      summaryPrompt = await prisma.aiPrompt.findFirst({ where: { active: true, name: { contains: 'summary' } } });
+    } catch (e) { summaryPrompt = null; }
+
+    if (summaryPrompt) {
+      const systemMsgs = Array.isArray(summaryPrompt.systemMessages) ? summaryPrompt.systemMessages : [];
+      const userMsgs = Array.isArray(summaryPrompt.userMessages) ? summaryPrompt.userMessages : [];
+      const rendered = userMsgs.map((m: any) => ({ role: m.role, content: String(m.content || '').replace(/\{\{subject\}\}/g, subject).replace(/\{\{from\}\}/g, from).replace(/\{\{body\}\}/g, body) }));
+      const msgs = [...systemMsgs, ...rendered];
+      result = await summarizeAndActionWithLLM({ subject, from, body, __messages: msgs } as any);
+    } else {
+      result = await summarizeAndActionWithLLM({ subject, from, body } as any);
+    }
     console.log(`[ai-action] ${tag} LLM result=${JSON.stringify(result).slice(0,1000)}`);
   } catch (llmErr) {
     console.warn(`[ai-action] ${tag} LLM failed`, llmErr);
