@@ -55,3 +55,4 @@ prisma/migrations/*/migration_lock.toml
 .cache/
 .pgdata/
 .miniodata/
+web/.miniodata/
