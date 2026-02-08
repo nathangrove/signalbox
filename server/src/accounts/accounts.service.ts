@@ -49,11 +49,13 @@ export class AccountsService {
       }
       throw e;
     }
-    await this.queueService.queues.fetch.add(
-      'fetch-account',
-      { accountId: account.id },
-      { removeOnComplete: true, removeOnFail: false }
-    );
+    if (!account.syncDisabled) {
+      await this.queueService.queues.fetch.add(
+        'fetch-account',
+        { accountId: account.id, reason: 'initial-import' },
+        { removeOnComplete: true, removeOnFail: false }
+      );
+    }
     return account;
   }
 
@@ -95,11 +97,24 @@ export class AccountsService {
   async syncAccount(userId: string, accountId: string) {
     const account = await this.prisma.account.findFirst({ where: { id: accountId, userId } });
     if (!account) throw new ConflictException('Account not found');
+    if (account.syncDisabled) return { ok: false, disabled: true };
     await this.queueService.queues.fetch.add(
       'fetch-account',
       { accountId: account.id },
       { removeOnComplete: true, removeOnFail: false }
     );
     return { ok: true };
+  }
+
+  async setSyncDisabled(userId: string, accountId: string, disabled: boolean) {
+    const account = await this.prisma.account.findFirst({ where: { id: accountId, userId } });
+    if (!account) throw new ConflictException('Account not found');
+
+    const updated = await this.prisma.account.update({
+      where: { id: accountId },
+      data: { syncDisabled: !!disabled }
+    });
+
+    return { ok: true, syncDisabled: updated.syncDisabled };
   }
 }

@@ -27,6 +27,10 @@ export class ImapFetcherService implements OnModuleDestroy {
     // load account record to get encrypted credentials
     const account = await this.prisma.account.findUnique({ where: { id: accountId } });
     if (!account) throw new Error('account not found');
+    if ((account as any).syncDisabled) {
+      console.log('[imap-fetcher] sync disabled for account', accountId, '- skipping');
+      return;
+    }
 
     // decrypt credentials - prefer encryptedCredentials if present
     let cfg = (account as any).config || {};

@@ -320,6 +320,10 @@ async function summarizeAndActionWithLLM(input: { subject: string; from: string;
 
 async function runSummaryAction(prisma: PrismaService, messageId: string, aiMetadataId: string, jobId?: string | number) {
   const tag = jobId ? `job.${jobId}` : 'job';
+  if ((process.env.AI_DISABLE_SUMMARY_ACTION || '').toLowerCase() === 'true') {
+    console.log(`[ai-action] ${tag} summarize/action disabled via AI_DISABLE_SUMMARY_ACTION=true`);
+    return { ok: true, skipped: 'disabled' };
+  }
   const message = await prisma.message.findUnique({ where: { id: messageId }, select: { id: true, subject: true, fromHeader: true, raw: true } });
   if (!message) throw new Error('message not found');
 

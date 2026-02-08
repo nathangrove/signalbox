@@ -65,6 +65,56 @@ export class MessagesService {
     }));
   }
 
+  async listForUserByAccount(userId: string, accountId: string, limit = 50, offset = 0, query?: string, category?: string) {
+    const take = Math.min(Math.max(limit, 1), 200);
+    const skip = Math.max(offset, 0);
+    const q = query && query.trim() ? `%${query.trim()}%` : null;
+
+    const rows = await this.prisma.$queryRaw`
+      SELECT
+        m.id,
+        m.subject,
+        m.from_header AS "fromHeader",
+        m.internal_date AS "internalDate",
+        m.size_bytes AS "sizeBytes",
+        m.flags,
+        m.read AS "read",
+        m.archived AS "archived",
+        am.labels->>'category' AS "category",
+        am.labels->>'spam' AS "spam",
+        am.labels->>'categoryReason' AS "categoryReason",
+        am.labels->>'cold' AS "cold",
+        (am.itinerary IS NOT NULL AND jsonb_typeof(am.itinerary) = 'array' AND jsonb_array_length(am.itinerary) > 0) AS "hasItinerary",
+        (am.tracking IS NOT NULL AND jsonb_typeof(am.tracking) = 'array' AND jsonb_array_length(am.tracking) > 0) AS "hasTracking"
+      FROM messages m
+      JOIN accounts a ON a.id = m.account_id
+      LEFT JOIN ai_metadata am ON am.message_id = m.id AND am.version = 1
+      WHERE m.account_id = ${accountId}
+        AND a.user_id = ${userId}
+        -- If no search query is provided, hide archived messages; if q is provided, include archived messages in search results
+        AND (${q}::text IS NOT NULL OR m.archived = false)
+        AND (
+          ${q}::text IS NULL OR (
+            m.subject ILIKE ${q}
+            OR COALESCE(m.from_header::text, '') ILIKE ${q}
+            OR COALESCE(m.to_header::text, '') ILIKE ${q}
+            OR COALESCE(m.message_id, '') ILIKE ${q}
+          )
+        )
+        AND (${category}::text IS NULL OR COALESCE(am.labels->>'category','other') = ${category})
+      ORDER BY m.internal_date DESC NULLS LAST, m.created_at DESC
+      LIMIT ${take} OFFSET ${skip}`;
+
+    return (rows as any[]).map(row => ({
+      ...row,
+      spam: row.spam === 'true',
+      read: row.read === true,
+      archived: row.archived === true,
+      hasItinerary: row.hasItinerary === true,
+      hasTracking: row.hasTracking === true
+    }));
+  }
+
   async getById(userId: string, id: string) {
     const message = await this.prisma.message.findFirst({
       where: { id, account: { userId } },
@@ -153,6 +203,37 @@ export class MessagesService {
     }
 
     return { ok: true };
+  }
+
+  async updateAiLabels(userId: string, messageId: string, updates: { category?: string | null; spam?: boolean | null }) {
+    // verify message belongs to user
+    const found = await this.prisma.$queryRaw`
+      SELECT m.id FROM messages m JOIN accounts a ON a.id = m.account_id WHERE m.id = ${messageId} AND a.user_id = ${userId} LIMIT 1` as any[];
+    if (!found || !found[0]) throw new NotFoundException('Message not found');
+
+    const metaRows = await this.prisma.$queryRaw`SELECT id, labels FROM ai_metadata WHERE message_id = ${messageId} AND version = 1 LIMIT 1` as any[];
+    const existing = (metaRows && metaRows[0] && metaRows[0].labels) ? metaRows[0].labels : {};
+    const next = Object.assign({}, existing);
+    if (Object.prototype.hasOwnProperty.call(updates, 'category')) {
+      if (updates.category === null) delete next.category;
+      else next.category = updates.category;
+    }
+    if (Object.prototype.hasOwnProperty.call(updates, 'spam')) {
+      if (updates.spam === null) delete next.spam;
+      else next.spam = updates.spam;
+    }
+
+    if (metaRows && metaRows[0]) {
+      await this.prisma.$queryRaw`UPDATE ai_metadata SET labels = ${JSON.stringify(next)}::jsonb, model = ${process.env.OPENAI_MODEL || 'gpt-4o-mini'}, provider = ${process.env.OPENAI_API_BASE ? 'openai-compatible' : 'openai'} WHERE id = ${metaRows[0].id}`;
+    } else {
+      await this.prisma.$queryRaw`INSERT INTO ai_metadata (message_id, model, provider, labels, created_at) VALUES (${messageId}, ${process.env.OPENAI_MODEL || 'pending'}, ${process.env.OPENAI_API_BASE ? 'openai-compatible' : 'openai'}, ${JSON.stringify(next)}::jsonb, now())`;
+    }
+
+    try {
+      await publishNotification({ type: 'message.updated', userId, messageId, changes: { aiLabels: next } });
+    } catch (e) { console.warn('notify publish failed', (e as any)?.message || e); }
+
+    return { ok: true, labels: next };
   }
 
   async markRead(userId: string, messageId: string, read = true) {
@@ -247,6 +328,26 @@ export class MessagesService {
     return { ok: true, updated: rows?.length || 0 };
   }
 
+  async markAllReadByAccount(userId: string, accountId: string, category?: string | null) {
+    const rows = await this.prisma.$queryRaw`
+      WITH target AS (
+        SELECT m.id
+        FROM messages m
+        JOIN accounts a ON a.id = m.account_id
+        LEFT JOIN ai_metadata am ON am.message_id = m.id AND am.version = 1
+        WHERE a.user_id = ${userId}
+          AND m.account_id = ${accountId}
+          AND m.archived = false
+          AND m.read = false
+          AND (${category}::text IS NULL OR COALESCE(am.labels->>'category','other') = ${category})
+      )
+      UPDATE messages
+      SET "read" = true, updated_at = now()
+      WHERE id IN (SELECT id FROM target)
+      RETURNING id` as any[];
+    return { ok: true, updated: rows?.length || 0 };
+  }
+
   async archiveAll(userId: string, mailboxId: string, category?: string | null) {
     const rows = await this.prisma.$queryRaw`
       WITH target AS (
@@ -256,6 +357,25 @@ export class MessagesService {
         LEFT JOIN ai_metadata am ON am.message_id = m.id AND am.version = 1
         WHERE a.user_id = ${userId}
           AND m.mailbox_id = ${mailboxId}
+          AND m.archived = false
+          AND (${category}::text IS NULL OR COALESCE(am.labels->>'category','other') = ${category})
+      )
+      UPDATE messages
+      SET archived = true, updated_at = now()
+      WHERE id IN (SELECT id FROM target)
+      RETURNING id` as any[];
+    return { ok: true, updated: rows?.length || 0 };
+  }
+
+  async archiveAllByAccount(userId: string, accountId: string, category?: string | null) {
+    const rows = await this.prisma.$queryRaw`
+      WITH target AS (
+        SELECT m.id
+        FROM messages m
+        JOIN accounts a ON a.id = m.account_id
+        LEFT JOIN ai_metadata am ON am.message_id = m.id AND am.version = 1
+        WHERE a.user_id = ${userId}
+          AND m.account_id = ${accountId}
           AND m.archived = false
           AND (${category}::text IS NULL OR COALESCE(am.labels->>'category','other') = ${category})
       )

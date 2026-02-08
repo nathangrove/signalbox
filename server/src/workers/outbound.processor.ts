@@ -28,6 +28,11 @@ export const outboundJobProcessor = async (job: any) => {
       account = await prisma.account.findFirst({ where: { userId } });
     }
     if (!account) throw new Error('Account to send from not found');
+    if (account.syncDisabled) {
+      console.log('[outbound] account sync disabled, skipping outbound job for account', account.id);
+      try { await publishNotification({ type: 'outbound.job.failed', userId, jobId: job.id, reason: 'account-disabled' }); } catch (_) {}
+      return { ok: true, skipped: 'sync-disabled' };
+    }
 
     // decrypt creds
     let creds: any = {};

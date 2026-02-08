@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import ReactQuill from 'react-quill'
 import 'react-quill/dist/quill.snow.css'
-import { archiveCategoryAll, enqueueMessageAi, getAccounts, getMailboxes, getMessage, getMessages, markCategoryReadAll, markMessageRead, markMessageUnread, setMessageArchived, syncAccount, downloadAttachment, sendMessage } from '../api'
+import { archiveCategoryAll, archiveCategoryAllByAccount, enqueueMessageAi, getAccounts, getMailboxes, getMessage, getMessages, getMessagesByAccount, markCategoryReadAll, markCategoryReadAllByAccount, markMessageRead, markMessageUnread, setMessageArchived, syncAccount, downloadAttachment, sendMessage, updateMessageLabels } from '../api'
 import { initSocket } from '../socket'
 import Box from '@mui/material/Box'
 import Paper from '@mui/material/Paper'
@@ -550,7 +550,7 @@ export default function Mail(){
   const [aiProcessing, setAiProcessing] = useState(false)
   const [contextMenu, setContextMenu] = useState<{ mouseX: number; mouseY: number; id: string } | null>(null)
   const contextMessage = useMemo(() => contextMenu ? messages.find(m => m.id === contextMenu.id) ?? null : null, [contextMenu, messages])
-  const [categoryMenu, setCategoryMenu] = useState<{ mouseX: number; mouseY: number; mailboxId: string; category: string } | null>(null)
+  const [categoryMenu, setCategoryMenu] = useState<{ mouseX: number; mouseY: number; mailboxId?: string; accountId?: string; category: string } | null>(null)
   const [openMessageRequest, setOpenMessageRequest] = useState<{ messageId: string; mailboxId?: string } | null>(null)
 
   useEffect(() => {
@@ -643,7 +643,8 @@ export default function Mail(){
     ;(async()=>{
       setLoadingMessages(true)
       try{
-        const data = await getMessages(selectedMailbox.id, pageSize, 0, debouncedSearch, selectedCategory || undefined)
+        const accountId = selectedMailbox.accountId
+        const data = accountId ? await getMessagesByAccount(accountId, pageSize, 0, debouncedSearch, selectedCategory || undefined) : []
         const list = Array.isArray(data) ? data : []
         setMessages(list)
         // do not auto-select a message when a folder is first selected — leave preview empty
@@ -667,11 +668,13 @@ export default function Mail(){
 
     function onCreated(payload: any) {
       if (!selectedMailbox) return;
-      if (payload.mailboxId !== selectedMailbox.id) return;
+      const mb = mailboxes.find(b => b.id === payload.mailboxId)
+      if (!mb) return;
+      if (mb.accountId !== selectedMailbox.accountId) return;
       refreshMailboxes();
       (async () => {
         try {
-          const data = await getMessages(selectedMailbox.id, pageSize, 0, debouncedSearch, selectedCategory || undefined);
+          const data = await getMessagesByAccount(selectedMailbox.accountId, pageSize, 0, debouncedSearch, selectedCategory || undefined);
           const list = Array.isArray(data) ? data : [];
           setMessages(list);
           setOffset(list.length);
@@ -891,6 +894,35 @@ export default function Mail(){
     catch (_err) { return [] }
   }, [messageDetail?.aiTracking])
 
+  async function handleUpdateMessageCategory(cat: string | null) {
+    if (!messageDetail?.id) return
+    try {
+      await updateMessageLabels(messageDetail.id, { category: cat })
+      const data = await getMessage(messageDetail.id)
+      if (data) {
+        setMessageDetail(data)
+        setMessages(prev => prev.map(m => m.id === data.id ? { ...m, category: data.category, spam: data.spam } : m))
+      }
+    } catch (e) {
+      console.warn('update category failed', e)
+    }
+  }
+
+  async function handleToggleSpam() {
+    if (!messageDetail?.id) return
+    try {
+      const nextSpam = !messageDetail.spam
+      await updateMessageLabels(messageDetail.id, { spam: nextSpam })
+      const data = await getMessage(messageDetail.id)
+      if (data) {
+        setMessageDetail(data)
+        setMessages(prev => prev.map(m => m.id === data.id ? { ...m, category: data.category, spam: data.spam } : m))
+      }
+    } catch (e) {
+      console.warn('toggle spam failed', e)
+    }
+  }
+
   function allowImagesForThisMessage() {
     if (!messageDetail?.id) return
     const next = { ...allowImagesForMessage, [messageDetail.id]: true }
@@ -986,7 +1018,8 @@ export default function Mail(){
     if (!selectedMailbox) return
     setLoadingMessages(true)
     try {
-      const data = await getMessages(selectedMailbox.id, pageSize, 0, debouncedSearch, selectedCategory || undefined)
+      const accountId = selectedMailbox.accountId
+      const data = accountId ? await getMessagesByAccount(accountId, pageSize, 0, debouncedSearch, selectedCategory || undefined) : []
       const list = Array.isArray(data) ? data : []
       setMessages(list)
       setSelectedMessage(list.length ? list[0] : null)
@@ -997,23 +1030,34 @@ export default function Mail(){
     }
   }
 
-  async function handleCategoryMarkAllRead(target: { mailboxId: string; category: string } | null) {
+  async function handleCategoryMarkAllRead(target: { mailboxId?: string; accountId?: string; category: string } | null) {
     if (!target) return
     try {
-      await markCategoryReadAll(target.mailboxId, target.category)
+      if (target.accountId) {
+        await markCategoryReadAllByAccount(target.accountId, target.category)
+      } else if (target.mailboxId) {
+        await markCategoryReadAll(target.mailboxId, target.category)
+      }
       await refreshMailboxes()
-      if (selectedMailbox?.id === target.mailboxId) await refreshCurrentMessages()
+      // if current view matches target, refresh
+      if (target.accountId && selectedMailbox?.accountId === target.accountId) await refreshCurrentMessages()
+      else if (target.mailboxId && selectedMailbox?.id === target.mailboxId) await refreshCurrentMessages()
     } catch (e) {
       console.warn('mark all as read failed', e)
     }
   }
 
-  async function handleCategoryArchiveAll(target: { mailboxId: string; category: string } | null) {
+  async function handleCategoryArchiveAll(target: { mailboxId?: string; accountId?: string; category: string } | null) {
     if (!target) return
     try {
-      await archiveCategoryAll(target.mailboxId, target.category)
+      if (target.accountId) {
+        await archiveCategoryAllByAccount(target.accountId, target.category)
+      } else if (target.mailboxId) {
+        await archiveCategoryAll(target.mailboxId, target.category)
+      }
       await refreshMailboxes()
-      if (selectedMailbox?.id === target.mailboxId) await refreshCurrentMessages()
+      if (target.accountId && selectedMailbox?.accountId === target.accountId) await refreshCurrentMessages()
+      else if (target.mailboxId && selectedMailbox?.id === target.mailboxId) await refreshCurrentMessages()
     } catch (e) {
       console.warn('archive all failed', e)
     }
@@ -1183,71 +1227,69 @@ export default function Mail(){
         {loadingBoxes ? <CircularProgress size={24} /> : (
           <List dense subheader={<li />}
             sx={{ '& .MuiListSubheader-root': { bgcolor: 'transparent', fontWeight: 600 } }}>
-            {mailboxGroups.map(([accountEmail, boxes]) => (
-              <li key={accountEmail}>
-                <ul style={{ padding: 0 }}>
-                  <ListSubheader>{accountEmail}</ListSubheader>
-                  {(boxes as any[]).map((box:any) => (
-                    <div key={box.id}>
-                      <ListItemButton
-                        selected={selectedMailbox?.id === box.id}
-                        onClick={() => {
-                          setSelectedMailbox(box);
-                          const isSent = (box.path === 'Sent' || box.name === 'Sent');
-                          setSelectedCategory(isSent ? null : 'primary');
-                          replaceRoute(box.id, isSent ? null : 'primary');
-                        }}
-                      >
-                        <ListItemText
-                          primary={box.name}
-                          secondary={box.lastCheckedAt ? <Typography variant="caption" color="text.secondary">{`Synced: ${timeAgo(box.lastCheckedAt)}`}</Typography> : null}
-                        />
-                        {box.unreadCount > 0 && <Chip label={box.unreadCount} size="small" color="primary" />}
-                      </ListItemButton>
-                      <Box sx={{ pl: 1, pt: 0, pb: 1 }}>
-                        <List disablePadding>
-                          {!(box.path === 'Sent' || box.name === 'Sent') && (
-                            <ListItemButton
-                              sx={{ pl: 3 }}
-                              selected={selectedMailbox?.id === box.id && selectedCategory === null}
-                              onClick={() => { if (selectedMailbox?.id !== box.id) setSelectedMailbox(box); setSelectedCategory(null); replaceRoute(box.id, null); }}
-                            >
-                              <ListItemText primary="All" primaryTypographyProps={{ fontSize: '0.9rem', fontWeight: 600, color: 'text.secondary' }} />
-                              <Chip label={box.totalCount} size="small" color="primary" />
-                            </ListItemButton>
-                          )}
-                            { !(box.path === 'Sent' || box.name === 'Sent') && ['primary','updates','social','newsletters','promotions','other'].map(cat => {
-                            const count = Number((box.categoryCounts && box.categoryCounts[cat]) || 0)
-                            const isSelected = selectedMailbox?.id === box.id && selectedCategory === cat
-                            return (
-                              <ListItemButton
-                                key={cat}
-                                sx={{ pl: 3 }}
-                                selected={isSelected}
-                                onContextMenu={(e) => {
-                                  e.preventDefault()
-                                  setContextMenu(null)
-                                  setCategoryMenu({ mouseX: e.clientX - 2, mouseY: e.clientY - 4, mailboxId: box.id, category: cat })
-                                }}
-                                onClick={() => {
-                                  if (selectedMailbox?.id !== box.id) setSelectedMailbox(box)
-                                const next = (selectedMailbox?.id === box.id && selectedCategory === cat) ? null : cat
-                                setSelectedCategory(next)
-                                replaceRoute(box.id, next)
-                                }}
-                              >
-                                <ListItemText primary={cat} primaryTypographyProps={{ fontSize: '0.9rem', fontWeight: 600, sx: { textTransform: 'capitalize' }, color: 'text.secondary' }} />
-                                { count > 0 && <Chip label={String(count)} size="small" /> }
-                              </ListItemButton>
-                            )
-                          })}
-                        </List>
-                      </Box>
-                    </div>
-                  ))}
-                </ul>
-              </li>
-            ))}
+            {mailboxGroups.map(([accountEmail, boxes]) => {
+              // aggregate category counts across all boxes for this account
+              const accountBoxes = (boxes as any[])
+              const labels = ['All','primary','updates','social','newsletters','promotions','other']
+              const firstBox = accountBoxes[0]
+              const aggregated: Record<string, number> = { All: 0, primary: 0, updates: 0, social: 0, newsletters: 0, promotions: 0, other: 0 }
+              for (const b of accountBoxes) {
+                aggregated.All += Number(b.totalCount || 0)
+                const cc = b.categoryCounts || {}
+                for (const l of Object.keys(aggregated)) {
+                  if (l === 'All') continue
+                  aggregated[l] += Number(cc[l] || 0)
+                }
+              }
+
+              return (
+                <li key={accountEmail}>
+                  <ul style={{ padding: 0 }}>
+                    <ListSubheader>{accountEmail}</ListSubheader>
+                    {labels.map(label => {
+                      // special handling for 'All' and 'Sent'
+                      const labelKey = label === 'All' ? null : label
+                      const count = aggregated[label as keyof typeof aggregated] || 0
+                      const isSelected = selectedMailbox && selectedMailbox.accountEmail === accountEmail && (label === 'All' ? selectedCategory === null : selectedCategory === label)
+                      return (
+                        <ListItemButton
+                          key={label}
+                          selected={!!isSelected}
+                          onContextMenu={(e) => {
+                            if (!firstBox) return
+                            e.preventDefault()
+                            setContextMenu(null)
+                            setCategoryMenu({ mouseX: e.clientX - 2, mouseY: e.clientY - 4, accountId: firstBox.accountId, category: labelKey || '' })
+                          }}
+                          onClick={() => {
+                            if (!firstBox) return
+                            setSelectedMailbox(firstBox)
+                            const nextCategory = label === 'All' ? null : label
+                            setSelectedCategory(nextCategory)
+                            replaceRoute(firstBox.id, nextCategory)
+                          }}
+                        >
+                          <ListItemText primary={label} primaryTypographyProps={{ fontSize: '0.9rem', fontWeight: 600, sx: { textTransform: label === 'All' ? 'none' : 'capitalize' }, color: 'text.secondary' }} />
+                          { count > 0 && <Chip label={String(count)} size="small" /> }
+                        </ListItemButton>
+                      )
+                    })}
+                    {/* show Sent mailbox if present for account */}
+                    {accountBoxes.map(b => (b.path === 'Sent' || b.name === 'Sent') ? (
+                      <div key={b.id}>
+                        <ListItemButton
+                          selected={selectedMailbox?.id === b.id}
+                          onClick={() => { setSelectedMailbox(b); setSelectedCategory(null); replaceRoute(b.id, null) }}
+                        >
+                          <ListItemText primary={b.name} primaryTypographyProps={{ fontSize: '0.9rem', fontWeight: 600, color: 'text.secondary' }} />
+                          {b.unreadCount > 0 && <Chip label={b.unreadCount} size="small" color="primary" />}
+                        </ListItemButton>
+                      </div>
+                    ) : null)}
+                  </ul>
+                </li>
+              )
+            })}
           </List>
         )}
       </Paper>
@@ -1423,12 +1465,12 @@ export default function Mail(){
               anchorPosition={categoryMenu ? { top: categoryMenu.mouseY, left: categoryMenu.mouseX } : undefined}
             >
               <MenuItem onClick={async () => {
-                const target = categoryMenu ? { mailboxId: categoryMenu.mailboxId, category: categoryMenu.category } : null
+                const target = categoryMenu ? { mailboxId: categoryMenu.mailboxId, accountId: categoryMenu.accountId, category: categoryMenu.category } : null
                 setCategoryMenu(null)
                 await handleCategoryMarkAllRead(target)
               }}>Mark all as read</MenuItem>
               <MenuItem onClick={async () => {
-                const target = categoryMenu ? { mailboxId: categoryMenu.mailboxId, category: categoryMenu.category } : null
+                const target = categoryMenu ? { mailboxId: categoryMenu.mailboxId, accountId: categoryMenu.accountId, category: categoryMenu.category } : null
                 setCategoryMenu(null)
                 await handleCategoryArchiveAll(target)
               }}>Archive all</MenuItem>
@@ -1445,24 +1487,28 @@ export default function Mail(){
             <Typography variant="body2" color="text.secondary">From: {formatFrom(messageDetail.fromHeader)}</Typography>
             <Typography variant="body2" color="text.secondary">Date: {formatDate(messageDetail.internalDate)}</Typography>
             <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
-              {messageDetail.category && (
-                <Tooltip title={messageDetail.aiCategoryReason || ''} arrow>
-                  <Chip
-                    label={messageDetail.category}
-                    size="small"
-                    color={categoryColor(messageDetail.category) as any}
-                    sx={{ textTransform: 'capitalize' }}
-                  />
-                </Tooltip>
-              )}
-              {messageDetail.spam && (
-                <Chip
-                  label="Spam"
-                  size="small"
-                  color="error"
-                  sx={{ ml: 1, fontWeight: 600 }}
-                />
-              )}
+              <FormControl size="small" sx={{ minWidth: 140 }}>
+                <InputLabel id="message-category-select">Category</InputLabel>
+                <Select
+                  labelId="message-category-select"
+                  value={messageDetail.category || ''}
+                  label="Category"
+                  onChange={(e: any) => handleUpdateMessageCategory(e.target.value || null)}
+                >
+                  <MenuItem value="">None</MenuItem>
+                  {['primary','updates','social','newsletters','promotions','other'].map(c => (
+                    <MenuItem key={c} value={c}>{c}</MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+              <Chip
+                label={messageDetail.spam ? 'Spam' : 'Not spam'}
+                size="small"
+                color={messageDetail.spam ? 'error' : 'default'}
+                onClick={handleToggleSpam}
+                clickable
+                sx={{ ml: 1, fontWeight: 600 }}
+              />
               {/* AI generated summary and recommended action */}
               {messageDetail.aiSummary && (
                 <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>{messageDetail.aiSummary}</Typography>

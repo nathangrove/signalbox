@@ -25,6 +25,7 @@ model Account {
   email                String    @unique @db.VarChar
   encryptedCredentials Bytes     @map("encrypted_credentials") @db.ByteA
   config               Json?     @default(dbgenerated("'{}'::jsonb")) @db.JsonB
+  syncDisabled         Boolean   @default(false) @map("sync_disabled") @db.Boolean
   createdAt            DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt            DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
   Mailboxes            Mailbox[]

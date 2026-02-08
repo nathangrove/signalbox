@@ -47,16 +47,46 @@ export function startIdleService(prisma: any) {
       try {
         const cfg = (account.config && Object.keys(account.config).length) ? account.config : decryptJson(account.encryptedCredentials);
         console.log('[idle] connecting imap idle for account', accountId, account.email, cfg);
-        if (!cfg || !cfg.imapHost || (!cfg.imapUser && !account.email) || !cfg.imapPass) {
+        if (!cfg || !(cfg.imapHost || cfg.host)) {
+          console.warn('[idle] missing imap host, cannot start idle', accountId);
+          await enqueueManualPoll(accountId, 'idle-missing-credentials');
+          break;
+        }
+
+        const imapHost = cfg.imapHost || cfg.host;
+        const imapPort = cfg.imapPort ?? cfg.port ?? 993;
+        const imapSecure = typeof cfg.imapSecure !== 'undefined' ? cfg.imapSecure : (typeof cfg.secure !== 'undefined' ? cfg.secure : true);
+        const imapUser = cfg.imapUser || cfg.user || account.email;
+
+        // Determine auth: prefer explicit cfg.auth, then plain pass, then OAuth token (xoauth2)
+        let authObj: any = undefined;
+        if (cfg.auth && (cfg.auth.user || cfg.auth.pass || cfg.auth.xoauth2)) {
+          authObj = cfg.auth;
+        } else if (cfg.imapPass || cfg.pass) {
+          authObj = { user: imapUser, pass: cfg.imapPass || cfg.pass };
+        } else if (cfg.oauth && cfg.oauth.access_token) {
+          // ImapFlow expects `accessToken` on the auth object for token-based auth
+          authObj = { user: imapUser, accessToken: cfg.oauth.access_token };
+        }
+
+        if (!imapUser || !authObj) {
           console.warn('[idle] missing imap credentials, cannot start idle', accountId);
           await enqueueManualPoll(accountId, 'idle-missing-credentials');
           break;
         }
+
+        // Debug: indicate auth type for idle client
+        if (authObj && (authObj as any).accessToken) {
+          console.log('[idle] using token auth (accessToken present) for account', accountId);
+        } else if (authObj && (authObj as any).pass) {
+          console.log('[idle] using password auth for account', accountId);
+        }
+
         const client = new ImapFlow({
-          host: cfg.imapHost,
-          port: cfg.imapPort ?? 993,
-          secure: typeof cfg.imapSecure !== 'undefined' ? cfg.imapSecure : true,
-          auth: cfg.auth || { user: cfg.imapUser || account.email, pass: cfg.imapPass },
+          host: imapHost,
+          port: imapPort,
+          secure: imapSecure,
+          auth: authObj,
           logger: IMAP_LOGGER
         });
 
@@ -136,8 +166,10 @@ export function startIdleService(prisma: any) {
       let started = 0;
       for (const acc of accounts) {
         if (started >= MAX_IDLE_CONNECTIONS) break;
-        // only start if encrypted credentials exist
-        if (!acc.encryptedCredentials || acc.encryptedCredentials.length === 0) continue;
+        if (acc.syncDisabled) continue;
+        // start only if encrypted credentials exist OR config has credential fields
+        const hasCreds = (acc.encryptedCredentials && acc.encryptedCredentials.length) || (acc.config && Object.keys(acc.config).length);
+        if (!hasCreds) continue;
         connectLoop(acc).catch(err => console.warn('[idle] unhandled connectLoop error', err));
         started += 1;
       }
@@ -149,7 +181,9 @@ export function startIdleService(prisma: any) {
           for (const acc of accountsNow) {
             if (activeClients.has(acc.id)) continue;
             if (activeClients.size >= MAX_IDLE_CONNECTIONS) break;
-            if (!acc.encryptedCredentials || acc.encryptedCredentials.length === 0) continue;
+            if (acc.syncDisabled) continue;
+            const hasCredsNow = (acc.encryptedCredentials && acc.encryptedCredentials.length) || (acc.config && Object.keys(acc.config).length);
+            if (!hasCredsNow) continue;
             connectLoop(acc).catch(err => console.warn('[idle] unhandled connectLoop error', err));
           }
         } catch (e) { console.warn('[idle] refresh accounts failed', (e as any)?.message || e); }

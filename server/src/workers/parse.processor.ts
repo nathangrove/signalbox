@@ -1,7 +1,7 @@
 import { Queue, WorkerOptions } from 'bullmq';
 import { PrismaService } from '../prisma/prisma.service';
 import { ImapFlow } from 'imapflow';
-import { decryptJson } from '../utils/crypto';
+import { decryptJson, encryptJson } from '../utils/crypto';
 import { simpleParser } from 'mailparser';
 import * as crypto from 'crypto';
 import { Readable } from 'stream';
@@ -18,7 +18,9 @@ const connection = new IORedis(process.env.REDIS_URL || 'redis://localhost:6379'
 const aiQueue = new Queue('ai', { connection });
 
 async function doFetch(client: ImapFlow, seq: string, uid: number, accountId: string, mailboxId: string, prisma: any, job: any) {
-  for await (const msg of client.fetch(seq, { source: true, envelope: true, internalDate: true, size: true, flags: true })) {
+  const fetchFields = { source: true, envelope: true, internalDate: true, size: true, flags: true };
+  const fetchOpts = (job && job.data && job.data.seq) ? undefined : { uid: true };
+  for await (const msg of client.fetch(seq, fetchFields, fetchOpts)) {
     // normal path
     
     const rawBuf: Buffer = msg.source as Buffer;
@@ -249,6 +251,10 @@ export const parseJobProcessor = async (job: any) => {
     // Fetch account and credentials/config
     const account = await prisma.account.findUnique({ where: { id: accountId } });
     if (!account) throw new Error(`Account ${accountId} not found`);
+    if (account.syncDisabled) {
+      console.log('[parse] sync disabled for account', accountId, '- skipping');
+      return { ok: true, skipped: 'sync-disabled' };
+    }
 
     let cfg: any = account.config || {};
     // prefer encryptedCredentials when config is empty or missing IMAP-specific fields
@@ -265,12 +271,34 @@ export const parseJobProcessor = async (job: any) => {
     const IMAP_LOGGER = IMAP_DEBUG ? console : { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} };
 
     // allow storing raw connection fields in config for the scaffold
+    const imapHost = cfg.imapHost || cfg.host;
+    const imapPort = cfg.imapPort ?? cfg.port ?? 993;
+    const imapSecure = typeof cfg.imapSecure !== 'undefined' ? cfg.imapSecure : (typeof cfg.secure !== 'undefined' ? cfg.secure : true);
+
+    // Build auth: prefer explicit cfg.auth, then password, then oauth access token
+    let imapAuth: any = cfg.auth;
+    if (!imapAuth) {
+      const user = cfg.imapUser || cfg.user || account.email;
+      if (cfg.imapPass) {
+        imapAuth = { user, pass: cfg.imapPass };
+      } else if (cfg.oauth && cfg.oauth.access_token) {
+        imapAuth = { user, accessToken: cfg.oauth.access_token };
+      } else {
+        imapAuth = { user, pass: cfg.imapPass };
+      }
+    }
+
     const imapCfg = {
-      host: cfg.imapHost,
-      port: cfg.imapPort ?? 993,
-      secure: typeof cfg.imapSecure !== 'undefined' ? cfg.imapSecure : true,
-      auth: cfg.auth || { user: cfg.imapUser || account.email, pass: cfg.imapPass }
+      host: imapHost,
+      port: imapPort,
+      secure: imapSecure,
+      auth: imapAuth
     };
+
+    if (!imapCfg.host) throw new Error(`Missing imap host for account ${accountId}`);
+    if (!imapCfg.auth || !imapCfg.auth.user || (!imapCfg.auth.pass && !imapCfg.auth.accessToken)) {
+      throw new Error(`Missing IMAP auth (user/pass or accessToken) for account ${accountId}`);
+    }
 
     // get or create client from pool, limiting to MAX_CLIENTS_PER_ACCOUNT
     let pool = imapClientPool.get(accountId) || [];
@@ -293,12 +321,73 @@ export const parseJobProcessor = async (job: any) => {
 
     try {
       await client.connect();
-    } catch (e) {
-      // remove from pool on connect failure
-      const idx = pool.indexOf(client);
-      if (idx > -1) pool.splice(idx, 1);
-      imapClientPool.set(accountId, pool);
-      throw e;
+    } catch (e: any) {
+      // If OAuth auth failed and refresh token exists, try refresh and retry once
+      if (cfg.oauth && cfg.oauth.refresh_token && e && e.authenticationFailed) {
+        console.log('[parse] token auth failed, attempting token refresh for account', accountId);
+        try {
+          const clientId = process.env.GOOGLE_OAUTH_CLIENT_ID;
+          const clientSecret = process.env.GOOGLE_OAUTH_CLIENT_SECRET;
+          if (!clientId || !clientSecret) throw new Error('missing GOOGLE_OAUTH_CLIENT_ID/SECRET');
+
+          const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+            method: 'POST',
+            headers: { 'content-type': 'application/x-www-form-urlencoded' },
+            body: new URLSearchParams({
+              grant_type: 'refresh_token',
+              refresh_token: cfg.oauth.refresh_token,
+              client_id: clientId,
+              client_secret: clientSecret
+            }).toString()
+          });
+          const tokenJson = await tokenRes.json();
+          if (!tokenJson || !tokenJson.access_token) {
+            console.warn('[parse] token refresh did not return access_token', tokenJson);
+            throw e;
+          }
+
+          cfg.oauth.access_token = tokenJson.access_token;
+          cfg.oauth.expires_in = tokenJson.expires_in;
+          cfg.oauth.obtained_at = Date.now();
+
+          try {
+            const encrypted = encryptJson(cfg);
+            await prisma.account.update({ where: { id: accountId }, data: { encryptedCredentials: encrypted } });
+            console.log('[parse] refreshed and persisted new access token for account', accountId);
+          } catch (updErr) {
+            console.warn('[parse] failed to persist refreshed token', accountId, (updErr as any)?.message || updErr);
+          }
+
+          // Recreate client with refreshed token
+          const refreshedAuth = { user: imapAuth.user, accessToken: cfg.oauth.access_token };
+          try { await client.logout(); } catch (_) {}
+          try { await client.close(); } catch (_) {}
+          client = new ImapFlow({
+            host: imapCfg.host,
+            port: imapCfg.port,
+            secure: imapCfg.secure,
+            auth: refreshedAuth,
+            socketTimeout: 30000,
+            logger: IMAP_LOGGER
+          });
+          pool.push(client);
+          imapClientPool.set(accountId, pool);
+          await client.connect();
+        } catch (refreshErr) {
+          console.warn('[parse] token refresh attempt failed', (refreshErr as any)?.message || refreshErr);
+          // remove from pool on connect failure
+          const idx = pool.indexOf(client);
+          if (idx > -1) pool.splice(idx, 1);
+          imapClientPool.set(accountId, pool);
+          throw e;
+        }
+      } else {
+        // remove from pool on connect failure
+        const idx = pool.indexOf(client);
+        if (idx > -1) pool.splice(idx, 1);
+        imapClientPool.set(accountId, pool);
+        throw e;
+      }
     }
 
     // ensure mailbox record exists
@@ -356,6 +445,13 @@ export const parseJobProcessor = async (job: any) => {
 };
 
 // Provide a WorkerOptions compatible export for requiring directly
-export const parseWorkerOptions: Partial<WorkerOptions> = { concurrency: 3 };
+export const parseWorkerOptions: Partial<WorkerOptions> = {
+  concurrency: Number(process.env.PARSE_CONCURRENCY || 3),
+  // Parse jobs can be long (large messages, attachments, DB writes).
+  // Keep the lock long enough to avoid false stalls and allow renewals.
+  lockDuration: Number(process.env.PARSE_LOCK_DURATION_MS || 30 * 60 * 1000),
+  stalledInterval: Number(process.env.PARSE_STALLED_INTERVAL_MS || 60 * 1000),
+  maxStalledCount: Number(process.env.PARSE_MAX_STALLED_COUNT || 5),
+};
 
 export default parseJobProcessor;

@@ -28,6 +28,12 @@ export async function getAccounts() {
   return res.json();
 }
 
+export async function getGoogleAuthUrl(accountId?: string) {
+  const qs = accountId ? `?accountId=${encodeURIComponent(accountId)}` : '';
+  const res = await fetch(`${API_BASE}/auth/google/url${qs}`, { headers: { ...authHeader() } });
+  return res.json();
+}
+
 export async function createAccount(payload: any) {
   const res = await fetch(`${API_BASE}/accounts`, {
     method: 'POST',
@@ -59,8 +65,25 @@ export async function getMessages(mailboxId: string, limit = 50, offset = 0, q?:
   return res.json();
 } 
 
+export async function getMessagesByAccount(accountId: string, limit = 50, offset = 0, q?: string, category?: string) {
+  const query = q ? `&q=${encodeURIComponent(q)}` : '';
+  const cat = category ? `&category=${encodeURIComponent(category)}` : '';
+  const url = `${API_BASE}/messages?accountId=${encodeURIComponent(accountId)}&limit=${limit}&offset=${offset}${query}${cat}`;
+  const res = await fetch(url, { headers: { ...authHeader() } });
+  return res.json();
+}
+
 export async function getMessage(id: string) {
   const res = await fetch(`${API_BASE}/messages/${encodeURIComponent(id)}`, { headers: { ...authHeader() } });
+  return res.json();
+}
+
+export async function updateMessageLabels(messageId: string, payload: { category?: string | null; spam?: boolean | null }) {
+  const res = await fetch(`${API_BASE}/messages/${encodeURIComponent(messageId)}/labels`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeader() },
+    body: JSON.stringify(payload)
+  });
   return res.json();
 }
 
@@ -117,6 +140,24 @@ export async function archiveCategoryAll(mailboxId: string, category?: string | 
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeader() },
     body: JSON.stringify({ mailboxId, category: category || null })
+  });
+  return res.json();
+}
+
+export async function markCategoryReadAllByAccount(accountId: string, category?: string | null) {
+  const res = await fetch(`${API_BASE}/messages/bulk-read`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeader() },
+    body: JSON.stringify({ accountId, category: category || null })
+  });
+  return res.json();
+}
+
+export async function archiveCategoryAllByAccount(accountId: string, category?: string | null) {
+  const res = await fetch(`${API_BASE}/messages/bulk-archive`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeader() },
+    body: JSON.stringify({ accountId, category: category || null })
   });
   return res.json();
 }

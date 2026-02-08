@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { getAccounts, createAccount, syncAccount, updateAccount } from '../api'
+import { getGoogleAuthUrl } from '../api'
 import Paper from '@mui/material/Paper'
 import TextField from '@mui/material/TextField'
 import Button from '@mui/material/Button'
@@ -38,6 +39,17 @@ export default function Accounts(){
   }
 
   useEffect(()=>{ load() },[])
+
+  // If redirected back from Google OAuth, reload accounts and clean URL
+  useEffect(()=>{
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('google_oauth') === 'ok') {
+      load();
+      params.delete('google_oauth');
+      const newUrl = window.location.pathname + (params.toString() ? `?${params.toString()}` : '');
+      window.history.replaceState({}, '', newUrl);
+    }
+  },[])
 
   async function add(e:React.FormEvent){
     e.preventDefault()
@@ -115,6 +127,14 @@ export default function Accounts(){
               <MenuItem value="imap">IMAP</MenuItem>
             </Select>
           </FormControl>
+          <Box>
+            <Button variant="outlined" onClick={async ()=>{
+              try{
+                const res:any = await getGoogleAuthUrl();
+                if (res && res.url) window.location.href = res.url;
+              }catch(e){ console.error('google auth url failed', e) }
+            }}>Connect with Google</Button>
+          </Box>
           <TextField label="Account email" value={email} onChange={e=>setEmail(e.target.value)} />
           <TextField label="IMAP host" value={host} onChange={e=>setHost(e.target.value)} />
           <TextField label="IMAP user" value={user} onChange={e=>setUser(e.target.value)} />

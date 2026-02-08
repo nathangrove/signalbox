@@ -12,14 +12,20 @@ export class MessagesController {
   async list(
     @Req() req: any,
     @Query('mailboxId') mailboxId?: string,
+    @Query('accountId') accountId?: string,
     @Query('limit') limit?: string,
     @Query('offset') offset?: string,
     @Query('q') q?: string,
     @Query('category') category?: string
   ) {
-    if (!mailboxId) return [];
     const userId = req.user.sub;
-    return this.svc.listForUser(userId, mailboxId, Number(limit || 50), Number(offset || 0), q, category);
+    if (mailboxId) {
+      return this.svc.listForUser(userId, mailboxId, Number(limit || 50), Number(offset || 0), q, category);
+    }
+    if (accountId) {
+      return this.svc.listForUserByAccount(userId, accountId, Number(limit || 50), Number(offset || 0), q, category);
+    }
+    return [];
   }
 
   @UseGuards(JwtAuthGuard)
@@ -56,6 +62,15 @@ export class MessagesController {
   }
 
   @UseGuards(JwtAuthGuard)
+  @Post(':id/labels')
+  async updateLabels(@Req() req: any, @Param('id') id: string, @Body() body: any) {
+    const userId = req.user.sub;
+    const category = body && typeof body.category === 'string' ? (body.category.trim() || null) : (body && body.category === null ? null : undefined);
+    const spam = body && typeof body.spam === 'boolean' ? body.spam : (body && body.spam === null ? null : undefined);
+    return this.svc.updateAiLabels(userId, id, { category, spam });
+  }
+
+  @UseGuards(JwtAuthGuard)
   @Post(':id/read')
   async markRead(@Req() req: any, @Param('id') id: string, @Body() body: any) {
     const userId = req.user.sub;
@@ -76,9 +91,11 @@ export class MessagesController {
   async markAllRead(@Req() req: any, @Body() body: any) {
     const userId = req.user.sub;
     const mailboxId = body && typeof body.mailboxId === 'string' ? body.mailboxId : null;
-    if (!mailboxId) throw new BadRequestException('mailboxId is required');
+    const accountId = body && typeof body.accountId === 'string' ? body.accountId : null;
+    if (!mailboxId && !accountId) throw new BadRequestException('mailboxId or accountId is required');
     const category = body && typeof body.category === 'string' && body.category.trim() ? body.category.trim() : null;
-    return this.svc.markAllRead(userId, mailboxId, category);
+    if (mailboxId) return this.svc.markAllRead(userId, mailboxId, category);
+    return this.svc.markAllReadByAccount(userId, accountId, category);
   }
 
   @UseGuards(JwtAuthGuard)
@@ -86,9 +103,11 @@ export class MessagesController {
   async archiveAll(@Req() req: any, @Body() body: any) {
     const userId = req.user.sub;
     const mailboxId = body && typeof body.mailboxId === 'string' ? body.mailboxId : null;
-    if (!mailboxId) throw new BadRequestException('mailboxId is required');
+    const accountId = body && typeof body.accountId === 'string' ? body.accountId : null;
+    if (!mailboxId && !accountId) throw new BadRequestException('mailboxId or accountId is required');
     const category = body && typeof body.category === 'string' && body.category.trim() ? body.category.trim() : null;
-    return this.svc.archiveAll(userId, mailboxId, category);
+    if (mailboxId) return this.svc.archiveAll(userId, mailboxId, category);
+    return this.svc.archiveAllByAccount(userId, accountId, category);
   }
 
   @UseGuards(JwtAuthGuard)

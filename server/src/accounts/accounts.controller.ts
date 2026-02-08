@@ -34,4 +34,12 @@ export class AccountsController {
     const userId = req.user.sub;
     return this.svc.syncAccount(userId, id);
   }
+
+  @UseGuards(JwtAuthGuard)
+  @Patch(':id/sync')
+  async setSyncDisabled(@Req() req: any, @Param('id') id: string, @Body() body: any) {
+    const userId = req.user.sub;
+    const disabled = !!body?.disabled;
+    return this.svc.setSyncDisabled(userId, id, disabled);
+  }
 }

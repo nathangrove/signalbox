@@ -16,7 +16,8 @@ export function startPollingScheduler(prisma: any) {
         FROM accounts a
         LEFT JOIN mailboxes m ON m.account_id = a.id AND m.path = 'INBOX'
         LEFT JOIN sync_state s ON s.mailbox_id = m.id
-        WHERE a.encrypted_credentials IS NOT NULL` as any[];
+        WHERE a.encrypted_credentials IS NOT NULL
+          AND coalesce(a.sync_disabled, false) = false` as any[];
 
       const now = new Date();
       for (const r of rows) {
