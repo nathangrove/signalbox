@@ -1,27 +1,30 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
+// Allow configuring the proxy target via environment so the dev server inside
+// Docker can proxy to the backend container hostname (e.g. http://app:3000)
+const proxyTarget = process.env.VITE_API_PROXY_TARGET || 'http://localhost:3000';
+
 export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
     proxy: {
-      // Proxy API requests to the backend dev server and strip the /api prefix
-      '/api': {
-        target: 'http://localhost:3000',
+      // Proxy requests under /v1 to the backend (no path rewrite)
+      '/v1': {
+        target: proxyTarget,
         changeOrigin: true,
         secure: false,
-        rewrite: (path) => path.replace(/^\/api/, ''),
       },
-      // Static/uploads or other backend-served paths
+      // Proxy uploads/static paths
       '/uploads': {
-        target: 'http://localhost:3000',
+        target: proxyTarget,
         changeOrigin: true,
         secure: false,
-        rewrite: (path) => path.replace(/^\/uploads/, '/uploads'),
       },
+      // Websocket path for socket.io
       '/socket': {
-        target: 'http://localhost:3000',
+        target: proxyTarget,
         changeOrigin: true,
         secure: false,
         ws: true

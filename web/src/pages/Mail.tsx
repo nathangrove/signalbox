@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { API_BASE } from '../api'
 import ReactQuill from 'react-quill'
 import 'react-quill/dist/quill.snow.css'
 import { archiveCategoryAll, archiveCategoryAllByAccount, enqueueMessageAi, getAccounts, getMailboxes, getMessage, getMessages, getMessagesByAccount, markCategoryReadAll, markCategoryReadAllByAccount, markMessageRead, markMessageUnread, setMessageArchived, downloadAttachment, sendMessage, updateMessageLabels } from '../api'
@@ -900,7 +901,7 @@ export default function Mail(){
           if (!at || !at.contentId) continue
           const cid = String(at.contentId).replace(/^<|>$/g, '')
           const re = new RegExp(`(["\'])cid:${cid}(["\'])`, 'gi')
-          const url = `/api/v1/messages/${encodeURIComponent(messageDetail.id)}/attachments/${encodeURIComponent(at.id)}?inline=1`
+          const url = `${API_BASE}/messages/${encodeURIComponent(messageDetail.id)}/attachments/${encodeURIComponent(at.id)}?inline=1`
           base = base.replace(re, `$1${url}$2`)
         }
       }

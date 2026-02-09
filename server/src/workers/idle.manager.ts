@@ -188,7 +188,6 @@ export function startIdleService(prisma: any) {
       for (const acc of accounts) {
         if (started >= MAX_IDLE_CONNECTIONS) break;
         if (acc.syncDisabled) continue;
-        console.log(acc);
         // start only if encrypted credentials exist OR config has credential fields
         const hasCreds = (acc.encryptedCredentials && acc.encryptedCredentials.length) || (acc.config && Object.keys(acc.config).length);
         if (!hasCreds) continue;

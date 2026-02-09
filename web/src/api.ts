@@ -1,4 +1,4 @@
-const API_BASE = (import.meta.env.VITE_API_BASE as string) || '/api/v1';
+export const API_BASE = (import.meta.env.VITE_API_BASE as string) || '/v1';
 
 function authHeader(): Record<string, string> {
   const token = localStorage.getItem('access_token');
