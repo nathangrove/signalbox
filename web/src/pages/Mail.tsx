@@ -1526,7 +1526,7 @@ export default function Mail(){
                             alignItems="flex-start"
                           >
                             <ListItemText
-                              primaryTypographyProps={{ fontWeight: unread ? 600 : 400 }}
+                              primaryTypographyProps={{ fontWeight: unread ? (theme.palette.mode === 'dark' ? 700 : 600) : 400 }}
                               primary={msg.subject || '(no subject)'}
                               secondary={
                                 <span>
