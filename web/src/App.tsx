@@ -1,8 +1,7 @@
 import React, { useState } from 'react'
 import Login from './pages/Login'
 import Mail from './pages/Mail'
-import Dashboard from './pages/Dashboard'
-import { initSocket, getSocket } from './socket'
+import { initSocket } from './socket'
 import { getMessage } from './api'
 import AppBar from '@mui/material/AppBar'
 import Toolbar from '@mui/material/Toolbar'
@@ -10,6 +9,13 @@ import Typography from '@mui/material/Typography'
 import Container from '@mui/material/Container'
 import Button from '@mui/material/Button'
 import IconButton from '@mui/material/IconButton'
+import MenuIcon from '@mui/icons-material/Menu'
+import { useTheme, ThemeProvider, createTheme } from '@mui/material/styles'
+import useMediaQuery from '@mui/material/useMediaQuery'
+import CssBaseline from '@mui/material/CssBaseline'
+import Switch from '@mui/material/Switch'
+import FormControlLabel from '@mui/material/FormControlLabel'
+import TextField from '@mui/material/TextField'
 import Menu from '@mui/material/Menu'
 import MenuItem from '@mui/material/MenuItem'
 import Dialog from '@mui/material/Dialog'
@@ -19,10 +25,27 @@ import SettingsIcon from '@mui/icons-material/Settings'
 import Accounts from './pages/Accounts'
 
 export default function App(){
+  const outerTheme = useTheme()
+  const isMobile = useMediaQuery(outerTheme.breakpoints.down('sm'))
   const [loggedIn, setLoggedIn] = useState(!!localStorage.getItem('access_token'))
-  const [page, setPage] = useState<'mail'|'dashboard'>('mail')
+
   const [settingsAnchor, setSettingsAnchor] = useState<null | HTMLElement>(null)
   const [openAccounts, setOpenAccounts] = useState(false)
+
+  const [mode, setMode] = useState<'light'|'dark'>(() => {
+    try { return (localStorage.getItem('theme') === 'dark') ? 'dark' : 'light' } catch { return 'light' }
+  })
+  const appTheme = React.useMemo(() => createTheme({ palette: { mode } }), [mode])
+  const [mobileSearch, setMobileSearch] = useState('')
+
+  React.useEffect(() => {
+    function onMailSearchUpdated(e: any) {
+      try { setMobileSearch(e?.detail?.search || '') } catch(_) {}
+    }
+    window.addEventListener('mailSearchUpdated', onMailSearchUpdated as any)
+    return () => window.removeEventListener('mailSearchUpdated', onMailSearchUpdated as any)
+  }, [])
+
 
   // initialize socket and desktop notifications when logged in
   React.useEffect(() => {
@@ -117,16 +140,35 @@ export default function App(){
   function handleCloseAccounts() { setOpenAccounts(false) }
 
   return (
-    <div>
+    <ThemeProvider theme={appTheme}>
+      <CssBaseline />
+      <div>
       <AppBar position="static">
         <Toolbar>
-          <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
-            Webmail AI
-          </Typography>
+          {loggedIn && isMobile && (
+            <IconButton color="inherit" onClick={() => window.dispatchEvent(new CustomEvent('toggleMailDrawer'))} size="small">
+              <MenuIcon />
+            </IconButton>
+          )}
+          {loggedIn && isMobile ? (
+            <TextField
+              size="small"
+              placeholder="Search mail"
+              value={mobileSearch}
+              onChange={(e) => {
+                const v = e.target.value
+                setMobileSearch(v)
+                try { window.dispatchEvent(new CustomEvent('mailSearchInput', { detail: { value: v } })) } catch(_) {}
+              }}
+              sx={{ flexGrow: 1, bgcolor: 'background.paper', borderRadius: 1 }}
+            />
+          ) : (
+            <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
+              Webmail AI
+            </Typography>
+          )}
           {loggedIn && (
             <>
-              <Button color={page === 'mail' ? 'inherit' : 'secondary'} onClick={() => setPage('mail')}>Mail</Button>
-              <Button color={page === 'dashboard' ? 'inherit' : 'secondary'} onClick={() => setPage('dashboard')}>Dashboard</Button>
               <IconButton color="inherit" onClick={openSettingsMenu} size="small">
                 <SettingsIcon />
               </IconButton>
@@ -137,6 +179,12 @@ export default function App(){
                 anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
                 transformOrigin={{ vertical: 'top', horizontal: 'right' }}
               >
+                <MenuItem>
+                  <FormControlLabel
+                    control={<Switch checked={mode === 'dark'} onChange={(e) => { const next = e.target.checked ? 'dark' : 'light'; setMode(next); try { localStorage.setItem('theme', next) } catch (_) {} }} />}
+                    label="Dark mode"
+                  />
+                </MenuItem>
                 <MenuItem onClick={handleOpenAccounts}>Accounts</MenuItem>
                 <MenuItem onClick={() => { closeSettingsMenu(); /* placeholder for other settings */ }}>Preferences</MenuItem>
                 <MenuItem onClick={() => { closeSettingsMenu(); logout(); }}>Logout</MenuItem>
@@ -152,9 +200,10 @@ export default function App(){
           <Accounts />
         </DialogContent>
       </Dialog>
-      <Container sx={{ mt: 4, maxWidth: 'xl' }}>
-        {loggedIn ? (page === 'mail' ? <Mail /> : <Dashboard />) : <Login onLogin={onLogin} />}
+      <Container disableGutters={isMobile} sx={{ mt: isMobile ? 0 : 4, px: isMobile ? 0 : undefined, maxWidth: 'xl' }}>
+        {loggedIn ? <Mail /> : <Login onLogin={onLogin} />}
       </Container>
-    </div>
+      </div>
+    </ThemeProvider>
   )
 }

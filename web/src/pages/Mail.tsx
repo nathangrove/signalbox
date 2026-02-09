@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import ReactQuill from 'react-quill'
 import 'react-quill/dist/quill.snow.css'
-import { archiveCategoryAll, archiveCategoryAllByAccount, enqueueMessageAi, getAccounts, getMailboxes, getMessage, getMessages, getMessagesByAccount, markCategoryReadAll, markCategoryReadAllByAccount, markMessageRead, markMessageUnread, setMessageArchived, syncAccount, downloadAttachment, sendMessage, updateMessageLabels } from '../api'
+import { archiveCategoryAll, archiveCategoryAllByAccount, enqueueMessageAi, getAccounts, getMailboxes, getMessage, getMessages, getMessagesByAccount, markCategoryReadAll, markCategoryReadAllByAccount, markMessageRead, markMessageUnread, setMessageArchived, downloadAttachment, sendMessage, updateMessageLabels } from '../api'
 import { initSocket } from '../socket'
 import Box from '@mui/material/Box'
 import Paper from '@mui/material/Paper'
@@ -18,6 +18,10 @@ import CircularProgress from '@mui/material/CircularProgress'
 import Chip from '@mui/material/Chip'
 import IconButton from '@mui/material/IconButton'
 import Avatar from '@mui/material/Avatar'
+import Drawer from '@mui/material/Drawer'
+import { useTheme } from '@mui/material/styles'
+import useMediaQuery from '@mui/material/useMediaQuery'
+import ArrowBackIcon from '@mui/icons-material/ArrowBack'
 import ArchiveIcon from '@mui/icons-material/Archive'
 import UnarchiveIcon from '@mui/icons-material/Unarchive'
 import LaunchIcon from '@mui/icons-material/Launch'
@@ -553,6 +557,17 @@ export default function Mail(){
   const [categoryMenu, setCategoryMenu] = useState<{ mouseX: number; mouseY: number; mailboxId?: string; accountId?: string; category: string } | null>(null)
   const [openMessageRequest, setOpenMessageRequest] = useState<{ messageId: string; mailboxId?: string } | null>(null)
 
+  const theme = useTheme()
+  const isMobile = useMediaQuery(theme.breakpoints.down('sm'))
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  const [mobileView, setMobileView] = useState<'list'|'message'>('list')
+
+  useEffect(() => {
+    function handler() { setDrawerOpen(true) }
+    window.addEventListener('toggleMailDrawer', handler as any)
+    return () => window.removeEventListener('toggleMailDrawer', handler as any)
+  }, [])
+
   useEffect(() => {
     (async()=>{
       const accs = await getAccounts()
@@ -709,6 +724,23 @@ export default function Mail(){
     }
   }, [selectedMailbox?.id, selectedCategory, debouncedSearch, selectedMessage?.id])
 
+  // Listen for search input from mobile AppBar
+  useEffect(() => {
+    function handler(ev: any) {
+      try {
+        const v = ev?.detail?.value || ''
+        setSearch(String(v))
+      } catch (e) { console.warn('mobile search handler', e) }
+    }
+    window.addEventListener('mailSearchInput', handler as any)
+    return () => window.removeEventListener('mailSearchInput', handler as any)
+  }, [])
+
+  // Emit search updates so AppBar can mirror current search
+  useEffect(() => {
+    try { window.dispatchEvent(new CustomEvent('mailSearchUpdated', { detail: { search } })) } catch (_) {}
+  }, [search])
+
   // Listen for external requests to open a specific message (from desktop notification click)
   useEffect(() => {
     function handler(ev: any) {
@@ -792,8 +824,11 @@ export default function Mail(){
   const mailboxTitle = useMemo(() => {
     if (!selectedMailbox) return 'Mailboxes'
     const account = accounts.find(a => a.id === selectedMailbox.accountId)
-    return account ? `${account.email} · ${selectedMailbox.name}` : selectedMailbox.name
-  }, [selectedMailbox, accounts])
+    const acctText = account ? account.email : selectedMailbox.accountEmail || 'Account'
+    const cat = selectedCategory ? String(selectedCategory) : 'All'
+    const catText = cat.charAt(0).toUpperCase() + cat.slice(1)
+    return `${acctText} - ${catText}`
+  }, [selectedMailbox, accounts, selectedCategory])
 
   const groupedMailboxes = useMemo(() => {
     const groups: Record<string, any[]> = {}
@@ -938,15 +973,7 @@ export default function Mail(){
   }
 
 
-  async function handleSync() {
-    if (!selectedMailbox?.accountId || syncing) return
-    setSyncing(true)
-    try {
-      await syncAccount(selectedMailbox.accountId)
-    } finally {
-      setSyncing(false)
-    }
-  }
+  
 
   async function handleAiProcess() {
     if (!messageDetail?.id || aiProcessing) return
@@ -1073,6 +1100,8 @@ export default function Mail(){
   const [composerRich, setComposerRich] = useState(true)
   const [inlineReplyOpen, setInlineReplyOpen] = useState(false)
 
+  const fabBottom = composerOpen ? (isMobile ? 'calc(70vh + 30px)' : 460) : 20
+
   function openCompose(prefill?: { to?: string; subject?: string; body?: string }) {
     setComposerTo(prefill?.to || '')
     setComposerCc('')
@@ -1181,9 +1210,143 @@ export default function Mail(){
     }
   }
 
+  const headerHeight = isMobile ? 56 : 112
+  const contentHtmlSx = useMemo(() => {
+    const base: any = {
+      maxWidth: '100%',
+      overflowX: 'auto',
+      wordBreak: 'break-word',
+      overflowWrap: 'break-word',
+      '& img': { maxWidth: '100%' },
+      '& table': { maxWidth: '100%', width: 'auto' },
+      '& pre': { whiteSpace: 'pre-wrap', wordBreak: 'break-word' }
+    }
+    if (theme.palette.mode === 'dark') {
+      return {
+        ...base,
+        color: theme.palette.text.primary,
+        backgroundColor: 'transparent',
+        '& *': { color: `${theme.palette.text.primary} !important` },
+        '& a': { color: `${(theme.palette as any).primary.light} !important` },
+        '& blockquote, & pre': { background: 'rgba(255,255,255,0.04)' }
+      }
+    }
+    return base
+  }, [theme.palette])
+
   return (
-    <Box sx={{ display: 'grid', gridTemplateColumns: '260px 360px 1fr', gap: 2, height: 'calc(100vh - 112px)' }}>
-      <Paper sx={{ p: 1.5, overflow: 'auto' }}>
+    <Box sx={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '260px 360px 1fr', gap: 2, height: `calc(100vh - ${headerHeight}px)` }}>
+      <Drawer open={drawerOpen} onClose={() => setDrawerOpen(false)} anchor="left">
+        <Box sx={{ width: 260, p: 1.5, overflow: 'auto' }}>
+          <FormControl fullWidth size="small" sx={{ mb: 1 }}>
+            <InputLabel id="mobile-account-select-label">Account</InputLabel>
+            <Select
+              labelId="mobile-account-select-label"
+              value={selectedAccountId || ''}
+              label="Account"
+              onChange={(e: any) => {
+                const val = e.target.value || null
+                setSelectedAccountId(val)
+                if (val) {
+                  const acc = accounts.find(a => a.id === val)
+                  if (acc) {
+                    const firstBox = mailboxes.find(b => b.accountId === acc.id)
+                    if (firstBox) {
+                      setSelectedMailbox(firstBox)
+                      setSelectedCategory(null)
+                      setSelectedMessage(null)
+                      setMessageDetail(null)
+                      try { replaceRoute(firstBox.id, null) } catch (_) {}
+                    }
+                  }
+                } else {
+                  setSelectedMailbox(null)
+                  setSelectedCategory(null)
+                  setSelectedMessage(null)
+                  setMessageDetail(null)
+                  try { replaceRoute(null, null) } catch (_) {}
+                }
+                setDrawerOpen(false)
+                setMobileView('list')
+              }}
+            >
+              <MenuItem value="">All accounts</MenuItem>
+              {accounts.map(a => (
+                <MenuItem key={a.id} value={a.id}>{a.email}</MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+          <Typography variant="subtitle2" sx={{ mb: 1, color: 'text.secondary' }}>Folders</Typography>
+          {loadingBoxes ? <CircularProgress size={24} /> : (
+            <List dense subheader={<li />} sx={{ '& .MuiListSubheader-root': { bgcolor: 'transparent', fontWeight: 600 } }}>
+              {mailboxGroups.map(([accountEmail, boxes]) => {
+                const accountBoxes = (boxes as any[])
+                const labels = ['All','primary','updates','social','newsletters','promotions','other']
+                const firstBox = accountBoxes[0]
+                const aggregated: Record<string, number> = { All: 0, primary: 0, updates: 0, social: 0, newsletters: 0, promotions: 0, other: 0 }
+                for (const b of accountBoxes) {
+                  aggregated.All += Number(b.totalCount || 0)
+                  const cc = b.categoryCounts || {}
+                  for (const l of Object.keys(aggregated)) {
+                    if (l === 'All') continue
+                    aggregated[l] += Number(cc[l] || 0)
+                  }
+                }
+
+                return (
+                  <li key={accountEmail}>
+                    <ul style={{ padding: 0 }}>
+                      <ListSubheader>{accountEmail}</ListSubheader>
+                      {labels.map(label => {
+                        const labelKey = label === 'All' ? null : label
+                        const count = aggregated[label as keyof typeof aggregated] || 0
+                        const isSelected = selectedMailbox && selectedMailbox.accountEmail === accountEmail && (label === 'All' ? selectedCategory === null : selectedCategory === label)
+                        return (
+                          <ListItemButton
+                            key={label}
+                            selected={!!isSelected}
+                            onContextMenu={(e) => {
+                              if (!firstBox) return
+                              e.preventDefault()
+                              setContextMenu(null)
+                              setCategoryMenu({ mouseX: e.clientX - 2, mouseY: e.clientY - 4, accountId: firstBox.accountId, category: labelKey || '' })
+                            }}
+                            onClick={() => {
+                              if (!firstBox) return
+                              setSelectedMailbox(firstBox)
+                              const nextCategory = label === 'All' ? null : label
+                              setSelectedCategory(nextCategory)
+                              replaceRoute(firstBox.id, nextCategory)
+                              setDrawerOpen(false)
+                              setMobileView('list')
+                            }}
+                          >
+                            <ListItemText primary={label} primaryTypographyProps={{ fontSize: '0.9rem', fontWeight: 600, sx: { textTransform: label === 'All' ? 'none' : 'capitalize' }, color: 'text.secondary' }} />
+                            { count > 0 && <Chip label={String(count)} size="small" /> }
+                          </ListItemButton>
+                        )
+                      })}
+                      {accountBoxes.map(b => (b.path === 'Sent' || b.name === 'Sent') ? (
+                        <div key={b.id}>
+                          <ListItemButton
+                            selected={selectedMailbox?.id === b.id}
+                            onClick={() => { setSelectedMailbox(b); setSelectedCategory(null); replaceRoute(b.id, null); setDrawerOpen(false); setMobileView('list') }}
+                          >
+                            <ListItemText primary={b.name} primaryTypographyProps={{ fontSize: '0.9rem', fontWeight: 600, color: 'text.secondary' }} />
+                            {b.unreadCount > 0 && <Chip label={b.unreadCount} size="small" color="primary" />}
+                          </ListItemButton>
+                        </div>
+                      ) : null)}
+                    </ul>
+                  </li>
+                )
+              })}
+            </List>
+          )}
+        </Box>
+      </Drawer>
+
+      <Paper sx={{ p: 1.5, overflow: 'auto', display: isMobile ? 'none' : 'block' }}>
         <FormControl fullWidth size="small" sx={{ mb: 1 }}>
           <InputLabel id="account-select-label">Account</InputLabel>
           <Select
@@ -1205,6 +1368,7 @@ export default function Mail(){
                     setSelectedMessage(null)
                     setMessageDetail(null)
                     try { replaceRoute(firstBox.id, null) } catch (_) {}
+                    if (isMobile) { setDrawerOpen(false); setMobileView('list') }
                   }
                 }
               } else {
@@ -1261,13 +1425,14 @@ export default function Mail(){
                             setContextMenu(null)
                             setCategoryMenu({ mouseX: e.clientX - 2, mouseY: e.clientY - 4, accountId: firstBox.accountId, category: labelKey || '' })
                           }}
-                          onClick={() => {
-                            if (!firstBox) return
-                            setSelectedMailbox(firstBox)
-                            const nextCategory = label === 'All' ? null : label
-                            setSelectedCategory(nextCategory)
-                            replaceRoute(firstBox.id, nextCategory)
-                          }}
+                            onClick={() => {
+                              if (!firstBox) return
+                              setSelectedMailbox(firstBox)
+                              const nextCategory = label === 'All' ? null : label
+                              setSelectedCategory(nextCategory)
+                              replaceRoute(firstBox.id, nextCategory)
+                              if (isMobile) { setDrawerOpen(false); setMobileView('list') }
+                            }}
                         >
                           <ListItemText primary={label} primaryTypographyProps={{ fontSize: '0.9rem', fontWeight: 600, sx: { textTransform: label === 'All' ? 'none' : 'capitalize' }, color: 'text.secondary' }} />
                           { count > 0 && <Chip label={String(count)} size="small" /> }
@@ -1279,7 +1444,7 @@ export default function Mail(){
                       <div key={b.id}>
                         <ListItemButton
                           selected={selectedMailbox?.id === b.id}
-                          onClick={() => { setSelectedMailbox(b); setSelectedCategory(null); replaceRoute(b.id, null) }}
+                          onClick={() => { setSelectedMailbox(b); setSelectedCategory(null); replaceRoute(b.id, null); if (isMobile) { setDrawerOpen(false); setMobileView('list') } }}
                         >
                           <ListItemText primary={b.name} primaryTypographyProps={{ fontSize: '0.9rem', fontWeight: 600, color: 'text.secondary' }} />
                           {b.unreadCount > 0 && <Chip label={b.unreadCount} size="small" color="primary" />}
@@ -1294,28 +1459,23 @@ export default function Mail(){
         )}
       </Paper>
 
-      <Paper sx={{ p: 1.5, overflow: 'auto' }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
+      <Paper sx={{ p: 1.5, overflow: 'auto', display: isMobile && mobileView === 'message' ? 'none' : 'block' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
           <Box>
             <Typography variant="subtitle2" sx={{ color: 'text.secondary' }}>{mailboxTitle}</Typography>
             {selectedMailbox?.lastCheckedAt && <Typography variant="caption" color="text.secondary">{`Synced: ${timeAgo(selectedMailbox.lastCheckedAt)}`}</Typography>}
           </Box>
-          <Chip
-            label={syncing ? 'Syncing…' : 'Sync'}
-            onClick={handleSync}
-            size="small"
-            color="primary"
-            variant={syncing ? 'filled' : 'outlined'}
-          />
         </Box>
-        <TextField
-          size="small"
-          placeholder="Search mail"
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          fullWidth
-          sx={{ mb: 1 }}
-        />
+        {!isMobile && (
+          <TextField
+            size="small"
+            placeholder="Search mail"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            fullWidth
+            sx={{ mb: 1 }}
+          />
+        )}
         {loadingMessages && messages.length === 0 ? <CircularProgress size={24} /> : messages.length === 0 ? (
           <Typography color="text.secondary" sx={{ py: 2 }}>Nothing to see here.</Typography>
         ) : (
@@ -1340,7 +1500,7 @@ export default function Mail(){
                         <React.Fragment key={msg.id}>
                           <ListItemButton
                             selected={selectedMessage?.id === msg.id}
-                            onClick={() => { setSelectedMessage(msg); replaceRoute(selectedMailbox?.id || null, selectedCategory || null) }}
+                            onClick={() => { setSelectedMessage(msg); replaceRoute(selectedMailbox?.id || null, selectedCategory || null); if (isMobile) setMobileView('message') }}
                             onContextMenu={(e) => { e.preventDefault(); setContextMenu({ mouseX: e.clientX - 2, mouseY: e.clientY - 4, id: msg.id }) }}
                             alignItems="flex-start"
                           >
@@ -1479,11 +1639,20 @@ export default function Mail(){
         )}
       </Paper>
 
-      <Paper sx={{ p: 2, overflow: 'auto' }}>
+      <Paper sx={{ p: 2, overflowY: 'auto', overflowX: 'hidden', display: isMobile && mobileView !== 'message' ? 'none' : 'block' }}>
         {loadingMessage && <CircularProgress size={24} />}
         {!loadingMessage && messageDetail && (
           <Box sx={{ display: 'grid', gap: 1.5 }}>
-            <Typography variant="h6">{messageDetail.subject || '(no subject)'}</Typography>
+            {isMobile ? (
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <IconButton size="small" onClick={() => { setSelectedMessage(null); setMessageDetail(null); setMobileView('list'); replaceRoute(selectedMailbox?.id || null, selectedCategory || null) }}>
+                  <ArrowBackIcon />
+                </IconButton>
+                <Typography variant="h6" sx={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{messageDetail.subject || '(no subject)'}</Typography>
+              </Box>
+            ) : (
+              <Typography variant="h6">{messageDetail.subject || '(no subject)'}</Typography>
+            )}
             <Typography variant="body2" color="text.secondary">From: {formatFrom(messageDetail.fromHeader)}</Typography>
             <Typography variant="body2" color="text.secondary">Date: {formatDate(messageDetail.internalDate)}</Typography>
             <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -1614,11 +1783,11 @@ export default function Mail(){
                     sanitizedHtml.html,
                     { name: fallbackName, email: getSenderAddress(messageDetail.fromHeader) || '', dateText: fallbackDate }
                   )
-                  if (!items || items.length < 2) {
-                    return <Box sx={{ '& img': { maxWidth: '100%' } }} dangerouslySetInnerHTML={{ __html: sanitizedHtml.html }} />
+                    if (!items || items.length < 2) {
+                    return <Box sx={contentHtmlSx} dangerouslySetInnerHTML={{ __html: sanitizedHtml.html }} />
                   }
                   return (
-                    <Box sx={{ display: 'grid', gap: 1 }}>
+                    <Box sx={[contentHtmlSx, { display: 'grid', gap: 1 }] }>
                       {items.map((it, idx) => (
                         <Box key={it.id} sx={{ display: 'grid', gridTemplateColumns: '40px 1fr', gap: 1, py: 1, borderBottom: idx < items.length - 1 ? '1px solid rgba(0,0,0,0.06)' : 'none' }}>
                           <Avatar sx={{ width: 32, height: 32 }}>{(it.name || 'U').charAt(0).toUpperCase()}</Avatar>
@@ -1706,7 +1875,7 @@ export default function Mail(){
       </Paper>
       {/* Composer floating UI */}
       {composerOpen && (
-        <Paper elevation={8} sx={{ position: 'fixed', right: 20, bottom: 20, width: 520, height: 420, display: 'flex', flexDirection: 'column', zIndex: 1400 }}>
+        <Paper elevation={8} sx={{ position: 'fixed', right: isMobile ? 10 : 20, left: isMobile ? 10 : 'auto', bottom: 20, width: isMobile ? 'auto' : 520, maxWidth: isMobile ? 'calc(100% - 20px)' : undefined, height: isMobile ? '70vh' : 420, display: 'flex', flexDirection: 'column', zIndex: 1400 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', p: 1, borderBottom: '1px solid rgba(0,0,0,0.08)' }}>
             <Typography variant="subtitle1">New Message</Typography>
             <Box>
@@ -1733,7 +1902,7 @@ export default function Mail(){
         </Paper>
       )}
 
-      <Fab variant="extended" color="primary" sx={{ position: 'fixed', right: 20, bottom: composerOpen ? 460 : 20 }} onClick={() => openCompose()}>
+      <Fab variant="extended" color="primary" sx={{ position: 'fixed', right: isMobile ? 10 : 20, bottom: fabBottom }} onClick={() => openCompose()}>
         Compose
       </Fab>
     </Box>
