@@ -252,8 +252,8 @@ export const parseJobProcessor = async (job: any) => {
     const account = await prisma.account.findUnique({ where: { id: accountId } });
     if (!account) throw new Error(`Account ${accountId} not found`);
     if (account.syncDisabled) {
-      console.log('[parse] sync disabled for account', accountId, '- skipping');
-      return { ok: true, skipped: 'sync-disabled' };
+      console.log('[parse] sync disabled for account', accountId, '- failing job');
+      throw new Error('sync-disabled');
     }
 
     let cfg: any = account.config || {};

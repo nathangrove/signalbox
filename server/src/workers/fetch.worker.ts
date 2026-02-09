@@ -322,7 +322,7 @@ export function createFetchWorkerHandler(prisma: any) {
                   accountId,
                   mailbox: mailboxPath,
                   uid: msg.uid,
-                }, { removeOnComplete: true, removeOnFail: false });
+                }, { jobId: `${mailboxId}-${msg.uid}`, removeOnComplete: true });
                 enqueued += 1;
                 totalEnqueued += 1;
                 if (totalEnqueued >= maxMessages) break;
@@ -361,7 +361,7 @@ export function createFetchWorkerHandler(prisma: any) {
                 seq: msg.seq,
                 envelope: msg.envelope,
                 internalDate: msg.internalDate,
-              }, { removeOnComplete: true, removeOnFail: false });
+              }, { jobId: `${mailboxId}-${msg.uid}`, removeOnComplete: true });
             }
           } catch (e) {
             console.warn(`[fetch] backfillRange ${backfillRange} failed: ${(e as any)?.message || e}`);
@@ -380,7 +380,7 @@ export function createFetchWorkerHandler(prisma: any) {
                     seq: msg.seq,
                     envelope: msg.envelope,
                     internalDate: msg.internalDate,
-                  }, { removeOnComplete: true, removeOnFail: false });
+                  }, { jobId: `${mailboxId}-${msg.uid}`, removeOnComplete: true });
                 }
               }
             } else {
@@ -399,14 +399,14 @@ export function createFetchWorkerHandler(prisma: any) {
             const existing = await existingUidsSet(mailboxId, uidsChunk);
             for (const msg of buffer) {
               if (!forceReimport && existing.has(Number(msg.uid))) continue;
-              await parseQueue.add('parse-message', {
-                accountId,
-                mailbox: mailboxPath,
-                uid: msg.uid,
-                seq: msg.seq,
-                envelope: msg.envelope,
-                internalDate: msg.internalDate,
-              }, { removeOnComplete: true, removeOnFail: false });
+                await parseQueue.add('parse-message', {
+                  accountId,
+                  mailbox: mailboxPath,
+                  uid: msg.uid,
+                  seq: msg.seq,
+                  envelope: msg.envelope,
+                  internalDate: msg.internalDate,
+                }, { jobId: `${mailboxId}-${msg.uid}`, removeOnComplete: true });
             }
             buffer = [];
           }

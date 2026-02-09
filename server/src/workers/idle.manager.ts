@@ -44,6 +44,16 @@ export function startIdleService(prisma: any) {
 
     while (true) {
       if (activeClients.has(accountId) && activeClients.get(accountId)!.stopped) break;
+      // Re-load account state before attempting to connect so we honor runtime changes
+      try {
+        const latest = await prisma.account.findUnique({ where: { id: accountId } });
+        if (latest && (latest as any).syncDisabled) {
+          console.log('[idle] account marked syncDisabled before connect, aborting idle start', accountId);
+          break;
+        }
+      } catch (e) {
+        console.warn('[idle] failed to re-load account before connect', accountId, (e as any)?.message || e);
+      }
       try {
         const cfg = (account.config && Object.keys(account.config).length) ? account.config : decryptJson(account.encryptedCredentials);
         console.log('[idle] connecting imap idle for account', accountId, account.email, cfg);
@@ -132,6 +142,17 @@ export function startIdleService(prisma: any) {
 
           // after idle or an event, check uidNext quickly
           try {
+            // If the account has been disabled while idleing, stop and cleanup
+            try {
+              const latestDuring = await prisma.account.findUnique({ where: { id: accountId } });
+              if (latestDuring && (latestDuring as any).syncDisabled) {
+                console.log('[idle] account disabled during idle, stopping client', accountId);
+                activeClients.get(accountId)!.stopped = true;
+                break;
+              }
+            } catch (rd) {
+              // non-fatal — continue to check uidNext
+            }
             const status = getUidNext();
             if (status && lastUidNext && status > lastUidNext) {
               console.log('[idle] uidNext increased; enqueue fetch', accountId, lastUidNext, '->', status);
@@ -167,6 +188,7 @@ export function startIdleService(prisma: any) {
       for (const acc of accounts) {
         if (started >= MAX_IDLE_CONNECTIONS) break;
         if (acc.syncDisabled) continue;
+        console.log(acc);
         // start only if encrypted credentials exist OR config has credential fields
         const hasCreds = (acc.encryptedCredentials && acc.encryptedCredentials.length) || (acc.config && Object.keys(acc.config).length);
         if (!hasCreds) continue;
@@ -174,10 +196,26 @@ export function startIdleService(prisma: any) {
         started += 1;
       }
 
-      // refresh periodically to pick up new accounts
+      // refresh periodically to pick up new accounts and stop idle clients for accounts that became disabled
       setInterval(async () => {
         try {
           const accountsNow = await prisma.account.findMany();
+          // Stop active clients for accounts that are now disabled
+          try {
+            const disabledSet = new Set((accountsNow.filter(a => a.syncDisabled).map(a => a.id)));
+            for (const [id, entry] of Array.from(activeClients.entries())) {
+              if (disabledSet.has(id)) {
+                console.log('[idle] stopping active idle client due to syncDisabled', id);
+                entry.stopped = true;
+                try { await entry.client.logout(); } catch (_) {}
+                try { await entry.client.close(); } catch (_) {}
+                activeClients.delete(id);
+              }
+            }
+          } catch (stopErr) {
+            console.warn('[idle] failed to stop disabled active clients', (stopErr as any)?.message || stopErr);
+          }
+
           for (const acc of accountsNow) {
             if (activeClients.has(acc.id)) continue;
             if (activeClients.size >= MAX_IDLE_CONNECTIONS) break;

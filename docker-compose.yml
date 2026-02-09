@@ -40,5 +40,20 @@ services:
       - redis
       - minio
 
+  classifier:
+    build:
+      context: ./classifier
+    image: webmail_classifier:latest
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - MODEL_PATH=/app/models/email_models.joblib
+    volumes:
+      - ./models:/app/models
+    restart: unless-stopped
+    depends_on:
+      - postgres
+
 volumes:
   pgdata:

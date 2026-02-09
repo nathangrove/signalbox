@@ -3,6 +3,53 @@ import { PrismaService } from '../prisma/prisma.service';
 import { simpleParser } from 'mailparser';
 import { Readable } from 'stream';
 import { buildClassifierMessages, buildSummaryMessages, CATEGORIES } from './ai.prompts';
+
+async function classifyWithLocalModel(input: { subject: string; from: string; body: string }) {
+  // Build candidate endpoints. Prefer explicit env var; otherwise try docker service then localhost (dev-friendly).
+  const envUrl = process.env.CLASSIFIER_URL && String(process.env.CLASSIFIER_URL).replace(/\/$/, '');
+  const candidates: string[] = [];
+  if (envUrl) candidates.push(envUrl.replace(/\/$/, '') + '/predict');
+  else {
+    candidates.push('http://classifier:8000/predict');
+    // when running locally (non-production), also try localhost so developer `npm run dev` can hit the container
+    if ((process.env.NODE_ENV || 'development') !== 'production') candidates.push('http://localhost:8000/predict');
+  }
+
+  const timeoutMs = Number(process.env.CLASSIFIER_REQUEST_TIMEOUT_MS || 10000);
+
+  for (const url of candidates) {
+    try {
+      const res = await fetchWithTimeout(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ subject: input.subject || '', body: input.body || '' })
+      }, timeoutMs);
+
+      if (!res.ok) {
+        const txt = await res.text().catch(() => '');
+        console.warn('[ai] local classifier non-ok', url, res.status, txt.slice(0, 200));
+        // try next candidate
+        continue;
+      }
+
+      const data = await res.json();
+      // expected: { spam_probability, categories, category_probs, predicted_category }
+      const spam_p = Number(data?.spam_probability ?? 0);
+      const predicted_category = String(data?.predicted_category || (Array.isArray(data?.categories) && data?.categories[0]) || 'other');
+      const cat_probs = Array.isArray(data?.category_probs) ? data.category_probs : [];
+      const cat_conf = cat_probs.length ? Math.max(...cat_probs) : 0.0;
+      return { category: predicted_category, spam: spam_p >= 0.5, confidence: Math.max(spam_p, cat_conf), cold: false, reason: 'local-model', raw: data };
+    } catch (e) {
+      // If the attempt timed out/failed, try next candidate before giving up.
+      console.warn('[ai] classifyWithLocalModel try failed', url, ((e as any)?.message || e));
+      continue;
+    }
+  }
+
+  // All candidates exhausted
+  console.warn('[ai] classifyWithLocalModel no reachable classifier endpoints');
+  return null;
+}
 function formatFrom(fromHeader: any): string {
   try {
     const list = Array.isArray(fromHeader) ? fromHeader : [];
@@ -155,7 +202,7 @@ async function fetchWithTimeout(url: string, opts: any = {}, timeoutMs = OPENAI_
         throw err;
       }
       const backoff = OPENAI_RETRY_BASE_MS * Math.pow(2, attempt - 1);
-      console.warn(`[ai] fetchWithTimeout attempt=${attempt} failed, retrying after ${backoff}ms`, (err as any)?.name || String(err));
+      console.warn(`[ai] fetchWithTimeout (${url}) attempt=${attempt} failed, retrying after ${backoff}ms`, (err as any)?.name || String(err));
       await new Promise((r) => setTimeout(r, backoff));
     } finally {
       clearTimeout(id);
@@ -204,17 +251,35 @@ export const aiJobProcessor = async (job: any) => {
     const from = formatFrom(message.fromHeader);
 
     let result = null;
+    let classificationMethod: string | null = null;
+    // Try local classifier first (fast)
     try {
-      console.log(`[ai] job.${job.id} calling LLM classifyWithLLM model=${process.env.OPENAI_MODEL ?? 'gpt-4o-mini'}`);
-      result = await classifyWithLLM({ subject, from, body });
-      console.log(`[ai] job.${job.id} LLM result=${JSON.stringify(result).slice(0,1000)}`);
-    } catch (llmErr) {
-      console.warn(`[ai] job.${job.id} LLM failed, falling back to heuristic`, llmErr);
+      result = await classifyWithLocalModel({ subject, from, body });
+      if (result) {
+        classificationMethod = 'local-model';
+        console.log(`[ai] job.${job.id} local classifier result=${JSON.stringify(result)}`);
+      }
+    } catch (err) {
+      console.warn(`[ai] job.${job.id} local classifier error`, err);
+      result = null;
+    }
+
+    // Fallback to LLM if local classifier unavailable or returned no category
+    if (!result || !result.category) {
+      try {
+        console.log(`[ai] job.${job.id} calling LLM classifyWithLLM model=${process.env.OPENAI_MODEL ?? 'gpt-4o-mini'}`);
+        result = await classifyWithLLM({ subject, from, body });
+        classificationMethod = 'llm';
+        console.log(`[ai] job.${job.id} LLM result=${JSON.stringify(result).slice(0,1000)}`);
+      } catch (llmErr) {
+        console.warn(`[ai] job.${job.id} LLM failed, falling back to heuristic`, llmErr);
+      }
     }
 
     if (!result || !result.category) {
       console.log(`[ai] job.${job.id} using heuristic classifier`);
       result = heuristicClassify(subject, from, body);
+      classificationMethod = 'heuristic';
       console.log(`[ai] job.${job.id} heuristic result=${JSON.stringify(result)}`);
     }
 
@@ -223,7 +288,8 @@ export const aiJobProcessor = async (job: any) => {
       spam: !!result.spam,
       confidence: typeof result.confidence === 'number' ? result.confidence : 0.5,
       cold: !!result.cold,
-      categoryReason: result.reason ? String(result.reason) : null
+      categoryReason: result.reason ? String(result.reason) : null,
+      method: classificationMethod || (result?.reason ? String(result.reason) : null)
     };
 
     console.log(`[ai] job.${job.id} updating ai_metadata id=${aiMetadataId} labels=${JSON.stringify(labels)}`);

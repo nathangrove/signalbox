@@ -33,7 +33,7 @@ export class QueueService implements OnModuleDestroy {
   }
 
   createQueue(name: string) {
-    const q = new Queue(name, { connection, defaultJobOptions: { removeOnComplete: true, removeOnFail: false } });
+    const q = new Queue(name, { connection, defaultJobOptions: { removeOnComplete: true, removeOnFail: 100 } });
     this.queues[name] = q;
     // Wire specific processors; keep a generic noop for others
     if (name === 'fetch') {

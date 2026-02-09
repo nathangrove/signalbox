@@ -119,7 +119,8 @@ export class ImapService implements OnModuleDestroy {
           for await (const msg of client.fetch(seq, { envelope: true, internalDate: true }, { uid: true })) {
             const uid = msg.uid as number;
             const payload = { accountId, mailbox: 'INBOX', uid };
-            await this.queueService.queues.parse.add('parse-message', payload, { removeOnComplete: true, removeOnFail: false });
+            const jobId = `${accountId}-INBOX-${uid}`;
+            await this.queueService.queues.parse.add('parse-message', payload, { jobId, removeOnComplete: true });
             enqueued += 1;
           }
         }

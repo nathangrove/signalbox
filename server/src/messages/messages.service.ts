@@ -223,6 +223,11 @@ export class MessagesService {
       else next.spam = updates.spam;
     }
 
+    // record that this update was performed manually by the user
+    next.method = 'manual';
+    next.modified_by = userId;
+    next.modified_at = new Date().toISOString();
+
     if (metaRows && metaRows[0]) {
       await this.prisma.$queryRaw`UPDATE ai_metadata SET labels = ${JSON.stringify(next)}::jsonb, model = ${process.env.OPENAI_MODEL || 'gpt-4o-mini'}, provider = ${process.env.OPENAI_API_BASE ? 'openai-compatible' : 'openai'} WHERE id = ${metaRows[0].id}`;
     } else {
