@@ -46,6 +46,7 @@ function categoryColor(category?: string | null) {
   }
 }
 import TextField from '@mui/material/TextField'
+import * as DarkReader from 'darkreader'
 
 function formatFrom(fromHeader: any): string {
   const list = Array.isArray(fromHeader) ? fromHeader : []
@@ -1233,6 +1234,26 @@ export default function Mail(){
     }
     return base
   }, [theme.palette])
+
+  useEffect(() => {
+    try {
+      if (theme.palette.mode === 'dark' && messageDetail?.html) {
+        if (DarkReader && DarkReader.enable) {
+          DarkReader.enable({ brightness: 100, contrast: 90, sepia: 10 })
+        }
+      } else {
+        if (DarkReader && DarkReader.disable) {
+          DarkReader.disable()
+        }
+      }
+    } catch (e) {
+      console.warn('DarkReader error', e)
+    }
+
+    return () => {
+      try { if (DarkReader && DarkReader.disable) DarkReader.disable() } catch (_) {}
+    }
+  }, [theme.palette.mode, messageDetail?.id])
 
   return (
     <Box sx={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '260px 360px 1fr', gap: 2, height: `calc(100vh - ${headerHeight}px)` }}>
