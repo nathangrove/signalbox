@@ -1,6 +1,6 @@
 {
-  "name": "Webmail AI",
-  "short_name": "Webmail",
+  "name": "NotJAEC — Not Just Another Email Client",
+  "short_name": "NotJAEC",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#ffffff",

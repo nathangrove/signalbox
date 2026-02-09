@@ -1,4 +1,4 @@
-# Webmail AI Platform — Design Document
+# NotJAEC — Not Just Another Email Client — Design Document
 
 ## Executive summary
 

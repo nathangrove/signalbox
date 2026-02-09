@@ -1,4 +1,4 @@
-# Webmail Frontend (dev)
+# NotJAEC Frontend (dev)
 
 This is a minimal Vite + React TypeScript frontend scaffold.
 

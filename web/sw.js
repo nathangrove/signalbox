@@ -1,4 +1,4 @@
-const CACHE_NAME = 'webmail-cache-v1';
+const CACHE_NAME = 'notjaec-cache-v1';
 const CORE_ASSETS = [
   '/',
   '/index.html',

@@ -1,4 +1,4 @@
-# Webmail Server (NestJS) — Local dev
+# NotJAEC Server (NestJS) — Local dev
 
 Prerequisites: Node.js 18+, Docker (for docker-compose), and `pnpm`/`npm`.
 

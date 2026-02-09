@@ -117,7 +117,7 @@ export default function App(){
         if (Notification.permission === 'default') {
           Notification.requestPermission().then(p => {
             if (p === 'granted') {
-              showDesktopNotification('Welcome to Webmail AI', 'Notifications enabled — you will receive new message alerts.');
+              showDesktopNotification('Welcome to NotJAEC', 'Notifications enabled — you will receive new message alerts.');
             }
           }).catch(() => {});
         }
@@ -164,7 +164,7 @@ export default function App(){
             />
           ) : (
             <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
-              Webmail AI
+              NotJAEC
             </Typography>
           )}
           {loggedIn && (
