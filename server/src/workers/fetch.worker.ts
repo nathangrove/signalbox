@@ -248,7 +248,7 @@ export function createFetchWorkerHandler(prisma: any) {
 
           const newRange = lastUid && lastUid > 0 ? `${lastUid + 1}:*` : `1:${exists}`;
 
-          console.log('[fetch] mailbox stats for account', accountId, { mailbox: mailboxPath, exists, uidNext, endUid, lastUid, newRange });
+          console.log('[fetch] mailbox stats for account', accountId, 'mailbox', mailboxPath);
 
           // If requested, perform a full initial import using lookback window
           if (reason === 'initial-import') {

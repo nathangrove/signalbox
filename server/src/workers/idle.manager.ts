@@ -56,7 +56,7 @@ export function startIdleService(prisma: any) {
       }
       try {
         const cfg = (account.config && Object.keys(account.config).length) ? account.config : decryptJson(account.encryptedCredentials);
-        console.log('[idle] connecting imap idle for account', accountId, account.email, cfg);
+        console.log('[idle] connecting imap idle for account', accountId, account.email);
         if (!cfg || !(cfg.imapHost || cfg.host)) {
           console.warn('[idle] missing imap host, cannot start idle', accountId);
           await enqueueManualPoll(accountId, 'idle-missing-credentials');
