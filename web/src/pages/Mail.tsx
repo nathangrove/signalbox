@@ -788,17 +788,47 @@ export default function Mail(){
     }
 
     function onUpdated(payload: any) {
-      const messageId = payload.messageId || payload.id;
-      if (!messageId) return;
-      const changes = payload.changes || {};
-      setMessages(prev => prev.map(m => m.id === messageId ? { ...m, ...changes } : m));
-      if (typeof changes.read === 'boolean' || typeof changes.archived === 'boolean') {
-        refreshMailboxes();
+      // Support single update object or array of updates
+      const updates = Array.isArray(payload) ? payload : [payload];
+      const appliedMap: Record<string, any> = {};
+      let shouldRefreshMailboxes = false;
+      let shouldRefreshDetail = false;
+
+      for (const item of updates) {
+        const messageId = item.messageId || item.id;
+        if (!messageId) continue;
+        const changes = item.changes || {};
+        let appliedChanges: any = { ...changes };
+        if (changes.aiLabels && typeof changes.aiLabels === 'object') {
+          const ai = changes.aiLabels as any;
+          appliedChanges.aiLabels = ai;
+          if (typeof ai.category !== 'undefined') appliedChanges.category = ai.category;
+          if (typeof ai.spam !== 'undefined') appliedChanges.spam = ai.spam;
+          if (typeof ai.categoryReason !== 'undefined') appliedChanges.categoryReason = ai.categoryReason;
+          if (typeof ai.method !== 'undefined') appliedChanges.categoryMethod = ai.method;
+        }
+        appliedMap[messageId] = { ...(appliedMap[messageId] || {}), ...appliedChanges };
+
+        if (typeof appliedChanges.read === 'boolean' || typeof appliedChanges.archived === 'boolean' || typeof appliedChanges.category !== 'undefined' || typeof appliedChanges.spam !== 'undefined') {
+          shouldRefreshMailboxes = true;
+        }
+        if (selectedMessage?.id === messageId) shouldRefreshDetail = true;
       }
-      if (selectedMessage?.id === messageId) {
+
+      if (Object.keys(appliedMap).length) {
+        setMessages(prev => prev.map(m => {
+          const upd = appliedMap[m.id];
+          return upd ? { ...m, ...upd } : m;
+        }));
+      }
+
+      if (shouldRefreshMailboxes) refreshMailboxes();
+
+      if (shouldRefreshDetail) {
+        const id = selectedMessage?.id as string;
         (async () => {
           try {
-            const data = await getMessage(messageId);
+            const data = await getMessage(id);
             setMessageDetail(data);
           } catch (e) { console.warn('refresh message detail failed', e); }
         })();
