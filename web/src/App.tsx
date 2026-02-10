@@ -2,11 +2,12 @@ import React, { useState } from 'react'
 import Login from './pages/Login'
 import Mail from './pages/Mail'
 import { initSocket } from './socket'
-import { getMessage } from './api'
+import { getMessage, getMailboxes } from './api'
 import AppBar from '@mui/material/AppBar'
 import Toolbar from '@mui/material/Toolbar'
 import Typography from '@mui/material/Typography'
 import Container from '@mui/material/Container'
+import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
 import IconButton from '@mui/material/IconButton'
 import MenuIcon from '@mui/icons-material/Menu'
@@ -23,6 +24,7 @@ import DialogTitle from '@mui/material/DialogTitle'
 import DialogContent from '@mui/material/DialogContent'
 import SettingsIcon from '@mui/icons-material/Settings'
 import Accounts from './pages/Accounts'
+import { fillFavicon } from './utils/favicon'
 
 export default function App(){
   const outerTheme = useTheme()
@@ -37,8 +39,23 @@ export default function App(){
   })
   const appTheme = React.useMemo(() => createTheme({ palette: { mode } }), [mode])
   const [mobileSearch, setMobileSearch] = useState('')
-  const [titleBase] = useState(() => (typeof document !== 'undefined' ? document.title || 'NotJAEC' : 'NotJAEC'))
-  const [unseenCount, setUnseenCount] = useState(0)
+  const [titleBase] = useState(() => (typeof document !== 'undefined' ? document.title || 'Signalbox' : 'Signalbox'))
+  const [primaryUnreadCount, setPrimaryUnreadCount] = useState(0)
+  const activeAccountRef = React.useRef<string | null>(null)
+
+  // fetch primary unread count, optionally scoped to an accountId
+  async function refreshPrimaryCount(accountId?: string | null) {
+    try {
+      const data = await getMailboxes(accountId || undefined)
+      const list = Array.isArray(data) ? data : []
+      let total = 0
+      for (const b of list) {
+        const cc = b.categoryCounts || {}
+        total += Number(cc.primary || 0)
+      }
+      setPrimaryUnreadCount(total)
+    } catch (e) { console.warn('refresh primary count failed', e) }
+  }
 
   React.useEffect(() => {
     function onMailSearchUpdated(e: any) {
@@ -46,6 +63,11 @@ export default function App(){
     }
     window.addEventListener('mailSearchUpdated', onMailSearchUpdated as any)
     return () => window.removeEventListener('mailSearchUpdated', onMailSearchUpdated as any)
+  }, [])
+
+  // make favicon logo fill the available space by rendering the SVG to a cover-scaled PNG
+  React.useEffect(() => {
+    try { fillFavicon().catch(() => {}) } catch (_) {}
   }, [])
 
 
@@ -81,44 +103,39 @@ export default function App(){
       }
     }
 
-    const onMessageCreated = (payload: any) => {
-      // increment unseen counter when new messages arrive while tab not visible/focused
-      try {
-        if (typeof document !== 'undefined' && (document.visibilityState !== 'visible' || !document.hasFocus())) {
-          setUnseenCount(c => c + 1)
-        }
-      } catch (_) {}
+    // use outer refreshPrimaryCount
 
+    const onMessageCreated = (payload: any) => {
       (async () => {
         try {
           if (!payload || !payload.messageId) return;
-
-          // Try to fetch message (and ai labels) a few times since classification may be async
           let msg: any = null;
           const attempts = [0, 2000, 5000];
           for (let i = 0; i < attempts.length; i++) {
-            try {
-              msg = await getMessage(payload.messageId);
-            } catch (_) { msg = null }
+            try { msg = await getMessage(payload.messageId); } catch (_) { msg = null }
             if (msg && (msg.category || typeof msg.spam !== 'undefined')) break;
             await new Promise(res => setTimeout(res, attempts[i]));
           }
-
-          // If we couldn't determine category/spam, skip notification
           if (!msg) return;
           const category = (msg.category || '').toLowerCase();
           const spam = !!msg.spam;
           if (spam) return;
-          if (category !== 'primary' && category !== 'updates') return;
-
+          // Only show desktop notification for primary
+          if (category !== 'primary') return;
           const title = payload.subject || msg.subject || 'New message';
           const from = payload.from ? (payload.from.name || payload.from.address || '') : (msg.fromHeader ? (Array.isArray(msg.fromHeader) && msg.fromHeader[0] ? (msg.fromHeader[0].name || msg.fromHeader[0].address) : '') : '');
           showDesktopNotification(title, from, { messageId: payload.messageId, mailboxId: payload.mailboxId });
+          // refresh primary unread badge (scoped to selected account)
+          try { await refreshPrimaryCount(activeAccountRef.current) } catch (_) {}
         } catch (e) { console.warn('message.created handler error', e); }
       })();
     };
 
     socket.on('message.created', onMessageCreated);
+    socket.on('message.updated', () => { try { refreshPrimaryCount(activeAccountRef.current) } catch (_) {} })
+
+    // initial primary unread count
+    try { refreshPrimaryCount().catch(() => {}) } catch (_) {}
 
     // Prompt for notification permission on first login and show welcome when granted
     try {
@@ -140,26 +157,27 @@ export default function App(){
     };
   }, [loggedIn]);
 
-  // update document title to show unseen count
+  // listen for account selection changes from Mail component and refresh primary count scoped to that account
+  React.useEffect(() => {
+    function onAccountSelection(e: any) {
+      try {
+        const aid = e?.detail?.accountId || undefined
+        activeAccountRef.current = aid || null
+        refreshPrimaryCount(aid)
+      } catch (_) {}
+    }
+    window.addEventListener('account.selection.changed', onAccountSelection as any)
+    return () => window.removeEventListener('account.selection.changed', onAccountSelection as any)
+  }, [])
+
+  // update document title to show primary unread count and update favicon badge
   React.useEffect(() => {
     try {
       if (typeof document === 'undefined') return
       const baseTitle = `Inbox - ${titleBase}`
-      document.title = unseenCount > 0 ? `(${unseenCount}) ${baseTitle}` : baseTitle
+      document.title = primaryUnreadCount > 0 ? `(${primaryUnreadCount}) ${baseTitle}` : baseTitle
     } catch (_) {}
-  }, [unseenCount, titleBase])
-
-  // clear unseen counter when user focuses / views the tab
-  React.useEffect(() => {
-    function clearCount() { try { setUnseenCount(0) } catch (_) {} }
-    function onVisibility() { if (typeof document !== 'undefined' && document.visibilityState === 'visible') clearCount() }
-    window.addEventListener('focus', clearCount)
-    window.addEventListener('visibilitychange', onVisibility)
-    return () => {
-      window.removeEventListener('focus', clearCount)
-      window.removeEventListener('visibilitychange', onVisibility)
-    }
-  }, [])
+  }, [primaryUnreadCount, titleBase])
 
   function onLogin(){ setLoggedIn(true) }
   function logout(){ localStorage.removeItem('access_token'); setLoggedIn(false) }
@@ -193,9 +211,9 @@ export default function App(){
               sx={{ flexGrow: 1, bgcolor: 'background.paper', borderRadius: 1 }}
             />
           ) : (
-            <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
-              NotJAEC
-            </Typography>
+            <Box sx={{ flexGrow: 1, display: 'flex', alignItems: 'center' }}>
+              <Box component="img" src="/logo-white-text.svg" alt="Signalbox" sx={{ height: 62 }} />
+            </Box>
           )}
           {loggedIn && (
             <>

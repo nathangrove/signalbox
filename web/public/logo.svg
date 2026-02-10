@@ -1,0 +1,32 @@
+<svg width="240" height="80" viewBox="0 0 240 80" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="signalGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#4F46E5"/>
+      <stop offset="100%" stop-color="#22D3EE"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Icon -->
+  <rect x="10" y="18" width="44" height="36" rx="8" fill="url(#signalGradient)"/>
+  
+  <!-- Signal line -->
+  <polyline 
+    points="16,40 22,34 28,46 34,30 40,42 46,36"
+    fill="none"
+    stroke="white"
+    stroke-width="2.5"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+
+  <!-- Brand Text -->
+  <text 
+    x="70" 
+    y="48" 
+    font-family="Inter, system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
+    font-size="28"
+    font-weight="600"
+    fill="#111827">
+    Signalbox
+  </text>
+</svg>

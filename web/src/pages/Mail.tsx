@@ -177,6 +177,39 @@ function plainTextToHtml(text: string) {
   }
 }
 
+function htmlToPlainText(html: string) {
+  try {
+    const parser = new DOMParser()
+    const doc = parser.parseFromString(html, 'text/html')
+    const blockTags = new Set(['p', 'div', 'br', 'li', 'blockquote', 'tr', 'table', 'header', 'footer', 'section'])
+    const out: string[] = []
+
+    function walk(node: Node) {
+      if (node.nodeType === Node.TEXT_NODE) {
+        out.push((node as Text).textContent || '')
+        return
+      }
+      if (node.nodeType !== Node.ELEMENT_NODE) return
+      const el = node as HTMLElement
+      const tag = el.tagName.toLowerCase()
+      if (tag === 'br') {
+        out.push('\n')
+        return
+      }
+      const isBlock = blockTags.has(tag)
+      if (isBlock) out.push('\n')
+      for (const child of Array.from(el.childNodes)) walk(child)
+      if (isBlock) out.push('\n')
+    }
+
+    walk(doc.body)
+    // collapse multiple newlines and trim
+    return out.join('').replace(/\u00A0/g, ' ').replace(/\n{3,}/g, '\n\n').replace(/\s+$/g, '').trim()
+  } catch (_) {
+    return html.replace(/<[^>]+>/g, '')
+  }
+}
+
 function htmlQuote(html: string, meta: any) {
   try {
     // sanitize minimal tracking pixels and then wrap original HTML in a blockquote
@@ -665,6 +698,13 @@ export default function Mail(){
       if (list.length) setSelectedAccountId(list[0].id || null)
     })()
   },[])
+
+  // notify other parts of the app when the selected account changes
+  useEffect(() => {
+    try {
+      window.dispatchEvent(new CustomEvent('account.selection.changed', { detail: { accountId: selectedAccountId } }))
+    } catch (_) {}
+  }, [selectedAccountId])
 
   useEffect(() => {
     (async()=>{
@@ -1933,69 +1973,16 @@ export default function Mail(){
                     {senderAddress && <Chip label={`Always allow from ${senderAddress}`} onClick={allowImagesForThisSender} size="small" variant="outlined" />}
                   </Box>
                 )}
-                {(() => {
-                  const fallbackName = formatFrom(messageDetail.fromHeader)
-                  const fallbackDate = formatDate(messageDetail.internalDate)
-                  const items = buildThreadItemsFromHtml(
-                    sanitizedHtml.html,
-                    { name: fallbackName, email: getSenderAddress(messageDetail.fromHeader) || '', dateText: fallbackDate }
-                  )
-                        if (!items || items.length < 2) {
-                        return <Box sx={[contentHtmlSx, { flex: 1, minHeight: 0 }]}><MessageIframe html={sanitizedHtml.html} darkMode={theme.palette.mode === 'dark'} darkReader={theme.palette.mode === 'dark'} /></Box>
-                      }
-                      return (
-                        <Box sx={[contentHtmlSx, { display: 'grid', gap: 1, flex: 1, minHeight: 0, overflow: 'auto' }] }>
-                      {items.map((it, idx) => (
-                        <Box key={it.id} sx={{ display: 'grid', gridTemplateColumns: '40px 1fr', gap: 1, py: 1, borderBottom: idx < items.length - 1 ? '1px solid rgba(0,0,0,0.06)' : 'none' }}>
-                          <Avatar sx={{ width: 32, height: 32 }}>{(it.name || 'U').charAt(0).toUpperCase()}</Avatar>
-                          <Box sx={{ display: 'grid', gap: 0.5 }}>
-                            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 2 }}>
-                              <Box sx={{ display: 'flex', gap: 1, alignItems: 'baseline', flexWrap: 'wrap' }}>
-                                <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>{it.name}</Typography>
-                                {it.email ? <Typography variant="body2" color="text.secondary">{`<${it.email}>`}</Typography> : null}
-                              </Box>
-                              {it.dateText ? <Typography variant="caption" color="text.secondary">{formatThreadDate(it.dateText)}</Typography> : null}
-                            </Box>
-                            <Box sx={{ '& img': { maxWidth: '100%' } }}>
-                              <MessageIframe html={it.bodyHtml || ''} darkMode={theme.palette.mode === 'dark'} darkReader={theme.palette.mode === 'dark'} />
-                            </Box>
-                          </Box>
-                        </Box>
-                      ))}
-                    </Box>
-                  )
-                })()}
+                {/* Thread-splitting temporarily disabled — render the whole HTML body as-is */}
+                <Box sx={[contentHtmlSx, { flex: 1, minHeight: 0 }]}>
+                  <MessageIframe html={sanitizedHtml.html} darkMode={theme.palette.mode === 'dark'} darkReader={theme.palette.mode === 'dark'} />
+                </Box>
               </Box>
               ) : (
-              (() => {
-                const text = messageDetail.text || ''
-                const fallbackName = formatFrom(messageDetail.fromHeader)
-                const fallbackDate = formatDate(messageDetail.internalDate)
-                const items = buildThreadItemsFromPlain(
-                  text,
-                  { name: fallbackName, email: getSenderAddress(messageDetail.fromHeader) || '', dateText: fallbackDate }
-                )
-                if (!items || items.length < 2) return <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto' }}><Typography variant="body1" sx={{ whiteSpace: 'pre-wrap', p: 1 }}>{text}</Typography></Box>
-                return (
-                  <Box sx={{ display: 'grid', gap: 1, flex: 1, minHeight: 0, overflow: 'auto' }}>
-                    {items.map((it, idx) => (
-                      <Box key={it.id} sx={{ display: 'grid', gridTemplateColumns: '40px 1fr', gap: 1, py: 1, borderBottom: idx < items.length - 1 ? '1px solid rgba(0,0,0,0.06)' : 'none' }}>
-                        <Avatar sx={{ width: 32, height: 32 }}>{(it.name || 'U').charAt(0).toUpperCase()}</Avatar>
-                        <Box sx={{ display: 'grid', gap: 0.5 }}>
-                          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 2 }}>
-                            <Box sx={{ display: 'flex', gap: 1, alignItems: 'baseline', flexWrap: 'wrap' }}>
-                              <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>{it.name}</Typography>
-                              {it.email ? <Typography variant="body2" color="text.secondary">{`<${it.email}>`}</Typography> : null}
-                            </Box>
-                            {it.dateText ? <Typography variant="caption" color="text.secondary">{formatThreadDate(it.dateText)}</Typography> : null}
-                          </Box>
-                          <Typography variant="body1" sx={{ whiteSpace: 'pre-wrap' }}>{it.bodyText || ''}</Typography>
-                        </Box>
-                      </Box>
-                    ))}
-                  </Box>
-                )
-              })()
+              /* Thread-splitting temporarily disabled — render plain text as a single block */
+              <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+                <Typography variant="body1" sx={{ whiteSpace: 'pre-wrap', p: 1 }}>{messageDetail.text || ''}</Typography>
+              </Box>
             )}
             {/* Inline reply composer (compact) */}
             {inlineReplyOpen && (
