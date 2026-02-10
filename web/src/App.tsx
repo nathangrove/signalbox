@@ -37,6 +37,8 @@ export default function App(){
   })
   const appTheme = React.useMemo(() => createTheme({ palette: { mode } }), [mode])
   const [mobileSearch, setMobileSearch] = useState('')
+  const [titleBase] = useState(() => (typeof document !== 'undefined' ? document.title || 'NotJAEC' : 'NotJAEC'))
+  const [unseenCount, setUnseenCount] = useState(0)
 
   React.useEffect(() => {
     function onMailSearchUpdated(e: any) {
@@ -80,6 +82,13 @@ export default function App(){
     }
 
     const onMessageCreated = (payload: any) => {
+      // increment unseen counter when new messages arrive while tab not visible/focused
+      try {
+        if (typeof document !== 'undefined' && (document.visibilityState !== 'visible' || !document.hasFocus())) {
+          setUnseenCount(c => c + 1)
+        }
+      } catch (_) {}
+
       (async () => {
         try {
           if (!payload || !payload.messageId) return;
@@ -130,6 +139,27 @@ export default function App(){
       try { socket.off('message.created', onMessageCreated); } catch (_) {}
     };
   }, [loggedIn]);
+
+  // update document title to show unseen count
+  React.useEffect(() => {
+    try {
+      if (typeof document === 'undefined') return
+      const baseTitle = `Inbox - ${titleBase}`
+      document.title = unseenCount > 0 ? `(${unseenCount}) ${baseTitle}` : baseTitle
+    } catch (_) {}
+  }, [unseenCount, titleBase])
+
+  // clear unseen counter when user focuses / views the tab
+  React.useEffect(() => {
+    function clearCount() { try { setUnseenCount(0) } catch (_) {} }
+    function onVisibility() { if (typeof document !== 'undefined' && document.visibilityState === 'visible') clearCount() }
+    window.addEventListener('focus', clearCount)
+    window.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      window.removeEventListener('focus', clearCount)
+      window.removeEventListener('visibilitychange', onVisibility)
+    }
+  }, [])
 
   function onLogin(){ setLoggedIn(true) }
   function logout(){ localStorage.removeItem('access_token'); setLoggedIn(false) }
