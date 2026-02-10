@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { API_BASE } from '../api'
 import ReactQuill from 'react-quill'
 import 'react-quill/dist/quill.snow.css'
+import MessageIframe from '../components/MessageIframe'
 import { archiveCategoryAll, archiveCategoryAllByAccount, enqueueMessageAi, getAccounts, getMailboxes, getMessage, getMessages, getMessagesByAccount, markCategoryReadAll, markCategoryReadAllByAccount, markMessageRead, markMessageUnread, setMessageArchived, downloadAttachment, sendMessage, updateMessageLabels } from '../api'
 import { initSocket } from '../socket'
 import Box from '@mui/material/Box'
@@ -1358,7 +1359,7 @@ export default function Mail(){
   }, [theme.palette.mode, messageDetail?.id])
 
   return (
-    <Box sx={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '260px 360px 1fr', gap: 2, height: `calc(100vh - ${headerHeight}px)` }}>
+    <Box sx={{ m: 0, display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '260px 360px calc(98vw - 260px - 360px - 32px)', gap: 2, height: `calc(100vh - ${headerHeight}px)` }}>
       <Drawer open={drawerOpen} onClose={() => setDrawerOpen(false)} anchor="left">
         <Box sx={{ width: 260, p: 1.5, overflow: 'auto' }}>
           <FormControl fullWidth size="small" sx={{ mb: 1 }}>
@@ -1762,10 +1763,10 @@ export default function Mail(){
         )}
       </Paper>
 
-      <Paper sx={{ p: 2, overflowY: 'auto', overflowX: 'hidden', display: isMobile && mobileView !== 'message' ? 'none' : 'block' }}>
+      <Paper sx={{ p: 2, overflowY: 'hidden', overflowX: 'hidden', display: isMobile && mobileView !== 'message' ? 'none' : 'flex', flexDirection: 'column' }}>
         {loadingMessage && <CircularProgress size={24} />}
         {!loadingMessage && messageDetail && (
-          <Box sx={{ display: 'grid', gap: 1.5 }}>
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, flex: 1, minHeight: 0 }}>
             {isMobile ? (
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                 <IconButton size="small" onClick={() => { setSelectedMessage(null); setMessageDetail(null); setMobileView('list'); replaceRoute(selectedMailbox?.id || null, selectedCategory || null) }}>
@@ -1891,8 +1892,8 @@ export default function Mail(){
             </Box>
 
             <Divider />
-            {messageDetail.html ? (
-              <Box sx={{ display: 'grid', gap: 1 }}>
+              {messageDetail.html ? (
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, flex: 1, minHeight: 0, overflow: 'hidden' }}>
                 {!imagesAllowed && sanitizedHtml.blockedCount > 0 && (
                   <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
                     <Typography variant="body2" color="text.secondary">
@@ -1909,11 +1910,11 @@ export default function Mail(){
                     sanitizedHtml.html,
                     { name: fallbackName, email: getSenderAddress(messageDetail.fromHeader) || '', dateText: fallbackDate }
                   )
-                    if (!items || items.length < 2) {
-                    return <Box sx={contentHtmlSx} dangerouslySetInnerHTML={{ __html: sanitizedHtml.html }} />
-                  }
-                  return (
-                    <Box sx={[contentHtmlSx, { display: 'grid', gap: 1 }] }>
+                        if (!items || items.length < 2) {
+                        return <Box sx={[contentHtmlSx, { flex: 1, minHeight: 0 }]}><MessageIframe html={sanitizedHtml.html} /></Box>
+                      }
+                      return (
+                        <Box sx={[contentHtmlSx, { display: 'grid', gap: 1, flex: 1, minHeight: 0, overflow: 'auto' }] }>
                       {items.map((it, idx) => (
                         <Box key={it.id} sx={{ display: 'grid', gridTemplateColumns: '40px 1fr', gap: 1, py: 1, borderBottom: idx < items.length - 1 ? '1px solid rgba(0,0,0,0.06)' : 'none' }}>
                           <Avatar sx={{ width: 32, height: 32 }}>{(it.name || 'U').charAt(0).toUpperCase()}</Avatar>
@@ -1925,7 +1926,9 @@ export default function Mail(){
                               </Box>
                               {it.dateText ? <Typography variant="caption" color="text.secondary">{formatThreadDate(it.dateText)}</Typography> : null}
                             </Box>
-                            <Box sx={{ '& img': { maxWidth: '100%' } }} dangerouslySetInnerHTML={{ __html: it.bodyHtml || '' }} />
+                            <Box sx={{ '& img': { maxWidth: '100%' } }}>
+                              <MessageIframe html={it.bodyHtml || ''} />
+                            </Box>
                           </Box>
                         </Box>
                       ))}
@@ -1933,7 +1936,7 @@ export default function Mail(){
                   )
                 })()}
               </Box>
-            ) : (
+              ) : (
               (() => {
                 const text = messageDetail.text || ''
                 const fallbackName = formatFrom(messageDetail.fromHeader)
@@ -1942,9 +1945,9 @@ export default function Mail(){
                   text,
                   { name: fallbackName, email: getSenderAddress(messageDetail.fromHeader) || '', dateText: fallbackDate }
                 )
-                if (!items || items.length < 2) return <Typography variant="body1" sx={{ whiteSpace: 'pre-wrap' }}>{text}</Typography>
+                if (!items || items.length < 2) return <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto' }}><Typography variant="body1" sx={{ whiteSpace: 'pre-wrap', p: 1 }}>{text}</Typography></Box>
                 return (
-                  <Box sx={{ display: 'grid', gap: 1 }}>
+                  <Box sx={{ display: 'grid', gap: 1, flex: 1, minHeight: 0, overflow: 'auto' }}>
                     {items.map((it, idx) => (
                       <Box key={it.id} sx={{ display: 'grid', gridTemplateColumns: '40px 1fr', gap: 1, py: 1, borderBottom: idx < items.length - 1 ? '1px solid rgba(0,0,0,0.06)' : 'none' }}>
                         <Avatar sx={{ width: 32, height: 32 }}>{(it.name || 'U').charAt(0).toUpperCase()}</Avatar>

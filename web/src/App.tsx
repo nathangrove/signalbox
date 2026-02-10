@@ -200,7 +200,7 @@ export default function App(){
           <Accounts />
         </DialogContent>
       </Dialog>
-      <Container disableGutters={isMobile} sx={{ mt: isMobile ? 0 : 4, px: isMobile ? 0 : undefined, maxWidth: 'xl' }}>
+      <Container disableGutters={isMobile} sx={{ mt: isMobile ? 0 : 4, px: isMobile ? 0 : undefined, maxWidth: 'xl', m: isMobile ? 0 : 2 }}>
         {loggedIn ? <Mail /> : <Login onLogin={onLogin} />}
       </Container>
       </div>
