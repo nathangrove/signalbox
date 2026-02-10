@@ -1911,7 +1911,7 @@ export default function Mail(){
                     { name: fallbackName, email: getSenderAddress(messageDetail.fromHeader) || '', dateText: fallbackDate }
                   )
                         if (!items || items.length < 2) {
-                        return <Box sx={[contentHtmlSx, { flex: 1, minHeight: 0 }]}><MessageIframe html={sanitizedHtml.html} /></Box>
+                        return <Box sx={[contentHtmlSx, { flex: 1, minHeight: 0 }]}><MessageIframe html={sanitizedHtml.html} darkMode={theme.palette.mode === 'dark'} darkReader={theme.palette.mode === 'dark'} /></Box>
                       }
                       return (
                         <Box sx={[contentHtmlSx, { display: 'grid', gap: 1, flex: 1, minHeight: 0, overflow: 'auto' }] }>
@@ -1927,7 +1927,7 @@ export default function Mail(){
                               {it.dateText ? <Typography variant="caption" color="text.secondary">{formatThreadDate(it.dateText)}</Typography> : null}
                             </Box>
                             <Box sx={{ '& img': { maxWidth: '100%' } }}>
-                              <MessageIframe html={it.bodyHtml || ''} />
+                              <MessageIframe html={it.bodyHtml || ''} darkMode={theme.palette.mode === 'dark'} darkReader={theme.palette.mode === 'dark'} />
                             </Box>
                           </Box>
                         </Box>

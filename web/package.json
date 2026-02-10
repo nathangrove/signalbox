@@ -18,12 +18,14 @@
     "react-dom": "^18.2.0",
     "socket.io-client": "^4.8.1",
     "react-quill": "^2.0.0"
+    ,"dompurify": "^2.4.0"
   },
   "devDependencies": {
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^4.0.0",
     "typescript": "^5.1.6",
     "vite": "^5.2.0"
+    ,"@types/dompurify": "^2.3.3"
   }
   
 }
