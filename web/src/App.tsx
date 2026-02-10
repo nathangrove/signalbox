@@ -134,8 +134,8 @@ export default function App(){
     socket.on('message.created', onMessageCreated);
     socket.on('message.updated', () => { try { refreshPrimaryCount(activeAccountRef.current) } catch (_) {} })
 
-    // initial primary unread count
-    try { refreshPrimaryCount().catch(() => {}) } catch (_) {}
+    // initial primary unread count (scope to selected account if present)
+    try { refreshPrimaryCount(activeAccountRef.current).catch(() => {}) } catch (_) {}
 
     // Prompt for notification permission on first login and show welcome when granted
     try {
