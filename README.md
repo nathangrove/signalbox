@@ -1,6 +1,6 @@
 # Signalbox
 
-![Signalbox Logo](web/public/logo.svg)
+![Signalbox Logo](web/public/logo-white-text.svg)
 
 Only the signal. None of the noise.
 
