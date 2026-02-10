@@ -85,7 +85,7 @@ services:
       - VITE_API_BASE=http://localhost:3000/v1
       - VITE_API_PROXY_TARGET=http://app:3000
     ports:
-      - '3001:5173'
+      - '0.0.0.0:3001:5173'
     command: sh -c "cd /app/web && npm install --silent && npm run dev -- --host 0.0.0.0 --port 5173"
     depends_on:
       - app

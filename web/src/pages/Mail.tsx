@@ -33,6 +33,7 @@ import Fab from '@mui/material/Fab'
 import SendIcon from '@mui/icons-material/Send'
 import CloseIcon from '@mui/icons-material/Close'
 import ReplyIcon from '@mui/icons-material/Reply'
+import ForwardIcon from '@mui/icons-material/Forward'
 import { isValid, parse } from 'date-fns'
 
 function categoryColor(category?: string | null) {
@@ -1131,6 +1132,21 @@ export default function Mail(){
     setInlineReplyOpen(true)
   }
 
+  function openForward() {
+    if (!messageDetail) return
+    let subj = messageDetail.subject || ''
+    if (subj && !/^fwd:/i.test(subj)) subj = `Fwd: ${subj}`
+    // prefer HTML quoted original when available
+    const bodyHtml = messageDetail ? (messageDetail.html ? buildQuotedOriginalHTML(messageDetail) : plainTextToHtml(messageDetail.text || messageDetail.body || '')) : ''
+    setComposerTo('')
+    setComposerCc('')
+    setComposerBcc('')
+    setComposerSubject(subj)
+    setComposerBody(bodyHtml)
+    setComposerRich(true)
+    setComposerOpen(true)
+  }
+
   function handleSendCompose() {
     if (!composerTo || !composerTo.trim()) {
       alert('Please enter at least one recipient')
@@ -1717,7 +1733,10 @@ export default function Mail(){
                 </Box>
               )}
 
-              <Box sx={{ ml: 'auto' }}>
+              <Box sx={{ ml: 'auto', display: 'flex', gap: 1 }}>
+                <IconButton size="small" onClick={openForward} title="Forward">
+                  <ForwardIcon />
+                </IconButton>
                 <IconButton size="small" onClick={openReply} title="Reply">
                   <ReplyIcon />
                 </IconButton>
