@@ -3,6 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { simpleParser } from 'mailparser';
 import { Readable } from 'stream';
 import { buildClassifierMessages, buildSummaryMessages, CATEGORIES } from './ai.prompts';
+import { publishNotification } from '../notifications/redis-pub';
 
 async function classifyWithLocalModel(input: { subject: string; from: string; body: string }) {
   // Build candidate endpoints. Prefer explicit env var; otherwise try docker service then localhost (dev-friendly).
@@ -305,6 +306,17 @@ export const aiJobProcessor = async (job: any) => {
           provider = ${process.env.OPENAI_API_BASE ? 'openai-compatible' : 'openai'},
           raw_response = ${JSON.stringify(result)}::jsonb
       WHERE id = ${aiMetadataId}`;
+
+    // Publish a notification so connected clients can update category/counts in real-time
+    try {
+      const acctRes: any = await prisma.$queryRaw`SELECT a.user_id FROM messages m JOIN accounts a ON a.id = m.account_id WHERE m.id = ${messageId} LIMIT 1`;
+      const userId = Array.isArray(acctRes) && acctRes[0] ? acctRes[0].user_id : (acctRes && acctRes.user_id ? acctRes.user_id : null);
+      if (userId) {
+        await publishNotification({ type: 'message.updated', userId, messageId, changes: { aiLabels: labels } });
+      }
+    } catch (e) {
+      console.warn('[ai] failed to publish message.updated notification', (e as any)?.message || e);
+    }
 
     console.log(`[ai] job.${job.id} complete`);
 
