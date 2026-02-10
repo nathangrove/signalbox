@@ -229,12 +229,43 @@ function splitPlainThread(text: string) {
     /^-----Original Message-----$/i,
     /^From:\s.*$/i
   ]
+  const isEmailLine = (ln: string) => /<\s*[^>\s]+@[^>\s]+\s*>/.test(ln) || /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(ln)
+  const extractEmail = (ln: string) => {
+    const match = ln.match(/<\s*([^>\s]+@[^>\s]+)\s*>/) || ln.match(/([^@\s]+@[^@\s]+\.[^@\s]+)/)
+    return match ? match[1] : ''
+  }
+  const isDateLine = (ln: string) => !!parseDateCandidate(ln)
+  const isLikelyNameLine = (ln: string) => !!ln && !isEmailLine(ln) && !isDateLine(ln) && ln.length <= 80
 
   const segments: Array<{ header?: string; body: string }> = []
   let currentLines: string[] = []
   let currentHeader: string | undefined = undefined
 
   const isHeader = (ln: string) => headerPatterns.some(p => p.test(ln.trim()))
+  const detectHeaderBlock = (startIndex: number) => {
+    const entries: Array<{ text: string; index: number }> = []
+    let j = startIndex
+    while (j < lines.length && entries.length < 4) {
+      const t = lines[j].trim()
+      if (t) entries.push({ text: t, index: j })
+      j += 1
+    }
+    if (!entries.length) return null
+    const dateEntry = entries.find(e => isDateLine(e.text))
+    if (!dateEntry) return null
+    const datePos = entries.indexOf(dateEntry)
+    if (datePos > 2) return null
+    const emailEntry = entries.find(e => isEmailLine(e.text))
+    const nameEntry = entries.find(e => isLikelyNameLine(e.text) && e.text !== dateEntry.text)
+    if (!emailEntry && !nameEntry) return null
+
+    const email = emailEntry ? extractEmail(emailEntry.text) : ''
+    const name = nameEntry ? nameEntry.text : ''
+    const who = name || email || 'Unknown'
+    const emailSuffix = email ? ` <${email}>` : ''
+    const header = `On ${dateEntry.text} ${who}${name ? emailSuffix : email ? emailSuffix : ''} wrote:`
+    return { header, endIndex: dateEntry.index }
+  }
 
   for (let i = 0; i < lines.length; i++) {
     const ln = lines[i]
@@ -244,6 +275,16 @@ function splitPlainThread(text: string) {
       }
       currentHeader = ln.trim()
       currentLines = []
+      continue
+    }
+    const block = detectHeaderBlock(i)
+    if (block) {
+      if (currentLines.length) {
+        segments.push({ header: currentHeader, body: currentLines.join('\n').trim() })
+      }
+      currentHeader = block.header
+      currentLines = []
+      i = block.endIndex
       continue
     }
     currentLines.push(ln)
@@ -258,8 +299,21 @@ function splitHtmlThread(html: string) {
     const parser = new DOMParser()
     const doc = parser.parseFromString(html, 'text/html')
     const body = doc.body
-    const headerRe = /^\s*On\b.*wrote:\s*$/i
     const normalize = (s: string) => s.replace(/[\u00A0\u202F\u2007]/g, ' ').trim()
+    const headerRe = /^\s*On\b.*wrote:\s*$/i
+    const originalMessageRe = /^-+\s*Original Message\s*-+$/i
+    const headerLabels = ['From', 'Sent', 'To', 'Subject', 'Cc', 'Date']
+    const headerLabelRe = new RegExp(`\\b(${headerLabels.join('|')})\\s*:\\s*`, 'gi')
+
+    const isHeaderText = (raw: string) => {
+      const text = normalize(raw)
+      if (!text) return false
+      if (headerRe.test(text)) return true
+      if (originalMessageRe.test(text)) return true
+      const matches = text.match(headerLabelRe)
+      if (matches && matches.length >= 2) return true
+      return false
+    }
 
     const segments: Array<{ header?: string; bodyHtml: string }> = []
     let currentNodes: Node[] = []
@@ -274,6 +328,13 @@ function splitHtmlThread(html: string) {
       currentNodes = []
     }
 
+    const pushInnerParts = (innerParts: Array<{ header?: string; bodyHtml: string }>, inheritedHeader?: string) => {
+      if (!innerParts.length) return
+      const merged = innerParts.map(p => ({ ...p }))
+      if (inheritedHeader && !merged[0].header) merged[0].header = inheritedHeader
+      merged.forEach(p => segments.push({ header: p.header, bodyHtml: p.bodyHtml }))
+    }
+
     const children = Array.from(body.childNodes)
     for (const node of children) {
       if (node.nodeType === Node.ELEMENT_NODE) {
@@ -285,16 +346,13 @@ function splitHtmlThread(html: string) {
           flushCurrent()
           const headerEl = el.querySelector('.gmail_attr') as HTMLElement | null
           const headerText = headerEl ? normalize(headerEl.textContent || '') : undefined
-          if (headerText && headerRe.test(headerText)) currentHeader = headerText
+          if (headerText && isHeaderText(headerText)) currentHeader = headerText
 
           const quoteEl = el.querySelector('blockquote') as HTMLElement | null
           if (quoteEl) {
             const innerParts = splitHtmlThread(quoteEl.innerHTML)
             if (innerParts.length) {
-              segments.push({ header: currentHeader, bodyHtml: innerParts[0].bodyHtml })
-              for (let i = 1; i < innerParts.length; i += 1) {
-                segments.push({ header: innerParts[i].header, bodyHtml: innerParts[i].bodyHtml })
-              }
+              pushInnerParts(innerParts, currentHeader)
               currentHeader = undefined
             } else {
               segments.push({ header: currentHeader, bodyHtml: quoteEl.outerHTML })
@@ -312,10 +370,7 @@ function splitHtmlThread(html: string) {
           flushCurrent()
           const innerParts = splitHtmlThread(el.innerHTML)
           if (innerParts.length) {
-            segments.push({ header: currentHeader, bodyHtml: innerParts[0].bodyHtml })
-            for (let i = 1; i < innerParts.length; i += 1) {
-              segments.push({ header: innerParts[i].header, bodyHtml: innerParts[i].bodyHtml })
-            }
+            pushInnerParts(innerParts, currentHeader)
             currentHeader = undefined
           } else {
             segments.push({ header: currentHeader, bodyHtml: el.outerHTML })
@@ -324,14 +379,14 @@ function splitHtmlThread(html: string) {
           continue
         }
 
-        if (text && headerRe.test(text)) {
+        if (text && isHeaderText(text)) {
           flushCurrent()
           currentHeader = text
           continue
         }
       } else if (node.nodeType === Node.TEXT_NODE) {
         const text = normalize(node.textContent || '')
-        if (text && headerRe.test(text)) {
+        if (text && isHeaderText(text)) {
           flushCurrent()
           currentHeader = text
           continue
@@ -382,6 +437,36 @@ function parseThreadHeader(raw?: string) {
   // strip common wrappers
   let text = String(raw).replace(/^On\s+/i, '').replace(/\s*wrote:\s*$/i, '').trim()
   text = text.replace(/[\u00A0\u202F\u2007]/g, ' ').replace(/\s+/g, ' ').trim()
+
+  const headerLabels = ['From', 'Sent', 'To', 'Subject', 'Cc', 'Date']
+  const fieldRe = (label: string) => new RegExp(`${label}\\s*:\\s*([\\s\\S]*?)(?=(?:${headerLabels.join('|')})\\s*:|$)`, 'i')
+
+  const extractField = (label: string) => {
+    const match = text.match(fieldRe(label))
+    return match ? match[1].trim() : ''
+  }
+
+  const parseNameEmail = (input: string) => {
+    if (!input) return { name: '', email: '' }
+    const emailMatch = input.match(/<\s*([^>\s]+@[^>\s]+)\s*>/)
+    const email = emailMatch ? emailMatch[1] : (input.match(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/) || [])[1] || ''
+    let name = input
+    if (email) name = name.replace(email, '')
+    name = name.replace(/[<>]/g, '').replace(/^[,;:\s]+|[,;:\s]+$/g, '').trim()
+    if (!name) name = email
+    return { name, email }
+  }
+
+  const fromField = extractField('From')
+  const sentField = extractField('Sent') || extractField('Date')
+  if (fromField || sentField) {
+    const parsed = parseNameEmail(fromField)
+    return {
+      name: parsed.name || parsed.email || 'Unknown',
+      email: parsed.email || '',
+      dateText: sentField || ''
+    }
+  }
 
   // extract email if present
   let email = ''
