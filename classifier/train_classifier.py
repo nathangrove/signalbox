@@ -1,6 +1,10 @@
 import os
 import re
 import argparse
+import json
+import time
+import urllib.request
+import urllib.error
 import numpy as np
 import pandas as pd
 from sentence_transformers import SentenceTransformer
@@ -9,6 +13,7 @@ from sklearn.calibration import CalibratedClassifierCV
 from xgboost import XGBClassifier
 from sklearn.metrics import accuracy_score, f1_score, roc_auc_score, classification_report
 import joblib
+from sqlalchemy import create_engine, text as sql_text
 
 URL_RE = re.compile(r'https?://\S+|\bwww\.\S+', re.I)
 
@@ -84,7 +89,7 @@ def load_data(csv_path=None, db_url=None):
             return ''
 
     if 'raw' in df.columns:
-        df['body'] = df['raw'].map(parse_raw_to_text)
+        def extract_label_fields(x):
     else:
         df['body'] = df.get('body', '').fillna('').astype(str)
 
@@ -100,6 +105,124 @@ def load_data(csv_path=None, db_url=None):
                 if isinstance(x, str):
                     j = json.loads(x)
                 else:
+
+def _llm_infer_category_openai(text, categories, model='gpt-3.5-turbo', api_key=None, base_url=None, timeout=20):
+    """Map `text` into one of `categories` using an LLM.
+    Supports OpenAI-compatible endpoints (via `base_url`) or Ollama when `base_url` includes 'ollama'.
+    Returns the chosen category string or None if unknown/error.
+    Does NOT write any labels to the DB; this is for in-memory training only.
+    """
+    if not api_key:
+        api_key = os.environ.get('OPENAI_API_KEY')
+    # If neither a key nor a base URL is provided, we can't call an LLM
+    if not api_key and not base_url:
+        return None
+
+    prompt = (
+        "You are a helpful assistant that maps an email to exactly one of the provided categories.\n"
+        f"Categories: {', '.join(categories)}\n"
+        "Return ONLY the category name (exactly matching one of the provided categories) with no additional text.\n"
+        "If none of the categories match, return 'unknown'.\n\n"
+        "Email text:\n" + (text[:2000] if text else '')
+    )
+
+    # Build OpenAI-style chat body (used for OpenAI-compatible endpoints)
+    body = {
+        'model': model,
+        'messages': [
+            {'role': 'system', 'content': 'You are a classifier.'},
+            {'role': 'user', 'content': prompt}
+        ],
+        'max_tokens': 32,
+        'temperature': 0.0
+    }
+
+    data = json.dumps(body).encode('utf-8')
+    try:
+        # Ollama path: if base_url contains 'ollama' we'll use its /api/generate
+        if base_url and 'ollama' in base_url:
+            ollama_url = base_url.rstrip('/') + '/api/generate'
+            ollama_payload = json.dumps({'model': model, 'input': prompt}).encode('utf-8')
+            req = urllib.request.Request(ollama_url, data=ollama_payload, headers={'Content-Type': 'application/json'})
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                resp_data = json.load(resp)
+                # Ollama response may contain outputs -> content -> text
+                msg = ''
+                outputs = resp_data.get('outputs') or []
+                if outputs and isinstance(outputs, list):
+                    first = outputs[0]
+                    content = first.get('content') or []
+                    for c in content:
+                        if c.get('type') == 'output_text' and c.get('text'):
+                            msg = c.get('text')
+                            break
+        else:
+            # OpenAI-compatible endpoint (allow custom base_url proxy), default to api.openai.com
+            url = (base_url.rstrip('/') + '/v1/chat/completions') if base_url else 'https://api.openai.com/v1/chat/completions'
+            headers = {'Content-Type': 'application/json'}
+            if api_key:
+                headers['Authorization'] = f'Bearer {api_key}'
+            req = urllib.request.Request(url, data=data, headers=headers)
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                resp_data = json.load(resp)
+                msg = resp_data.get('choices', [{}])[0].get('message', {}).get('content', '')
+
+        if not msg:
+            return None
+        out = str(msg).strip().strip('"')
+        # normalize to one of categories (case-insensitive)
+        for c in categories:
+            if out.lower() == c.lower():
+                return c
+        for c in categories:
+            if c.lower() in out.lower():
+                return c
+        if out.lower().startswith('unknown'):
+            return 'unknown'
+        return None
+    except urllib.error.HTTPError as e:
+        try:
+            err = e.read().decode('utf-8')
+            print('LLM HTTP error', e.code, err[:200])
+        except Exception:
+            print('LLM HTTP error', e)
+        return None
+    except Exception as e:
+        print('LLM request failed', e)
+        return None
+
+
+def _persist_inferred_labels(db_url, inferred_map: dict, model='llm', provider='llm'):
+    """Upsert inferred category labels into ai_metadata for given message ids.
+    inferred_map: dict mapping message_id (uuid string) -> category string
+    This will UPDATE existing ai_metadata (version=1) labels.category if present, or INSERT a new row.
+    """
+    if not db_url:
+        raise ValueError('db_url is required to persist inferred labels')
+    eng = create_engine(db_url, future=True)
+    with eng.begin() as conn:
+        for mid, cat in inferred_map.items():
+            try:
+                # Try to update existing ai_metadata (version=1)
+                upd_sql = sql_text("""
+                UPDATE ai_metadata
+                SET labels = jsonb_set(coalesce(labels, '{}'::jsonb), '{category}', to_jsonb(:cat::text), true),
+                    model = :model, provider = :provider
+                WHERE message_id = :mid AND version = 1
+                RETURNING id
+                """)
+                res = conn.execute(upd_sql, {'cat': cat, 'model': model, 'provider': provider, 'mid': mid})
+                row = res.fetchone()
+                if row is None:
+                    # Insert new ai_metadata row (version=1)
+                    ins_sql = sql_text("""
+                    INSERT INTO ai_metadata (message_id, version, model, provider, labels)
+                    VALUES (:mid, 1, :model, :provider, :labels::jsonb)
+                    """)
+                    labels_json = json.dumps({'category': cat, 'inferred_by': provider, 'inferred_at': time.strftime('%Y-%m-%dT%H:%M:%SZ')})
+                    conn.execute(ins_sql, {'mid': mid, 'model': model, 'provider': provider, 'labels': labels_json})
+            except Exception as e:
+                print(f'Failed to upsert ai_metadata for message {mid}:', e)
                     j = x
                 category = j.get('category') if isinstance(j, dict) else None
                 spam = j.get('spam') if isinstance(j, dict) else None
@@ -121,10 +244,68 @@ def meta_features(df):
 def build_embeddings(sent_model, texts, batch_size=64):
     return sent_model.encode(texts.tolist(), show_progress_bar=True, batch_size=batch_size, convert_to_numpy=True)
 
-def train_and_save(csv_path, db_url, out_path, emb_model_name='all-MiniLM-L6-v2', test_size=0.15, random_state=42):
+def train_and_save(csv_path, db_url, out_path, emb_model_name='all-MiniLM-L6-v2', test_size=0.15, random_state=42, use_llm=False, llm_model='gpt-3.5-turbo', openai_key=None, llm_base=None, categories_override=None):
     df = load_data(csv_path=csv_path, db_url=db_url)
     if df.empty:
         raise SystemExit("No training rows found")
+    # Ensure text column exists
+    df['text'] = df.get('text', (df.get('subject','').fillna('') + '\n\n' + df.get('body','').fillna('')) if True else '')
+    df['text'] = df['text'].map(lambda s: s.strip())
+
+    # Extract existing category labels (user-set) if present
+    user_categories = []
+    if 'category' in df.columns:
+        user_categories = sorted([c for c in df['category'].dropna().unique() if c])
+
+    # If caller provided a fixed list of categories, use that list for LLM mapping and training
+    provided_categories = None
+    if categories_override:
+        provided_categories = [c.strip() for c in str(categories_override).split(',') if c.strip()]
+
+    # If requested, run LLM to infer missing categories (in-memory only)
+    if use_llm:
+        categories_for_inference = provided_categories or user_categories
+        if not categories_for_inference:
+            print('No user categories available for LLM inference; skipping LLM mapping')
+        else:
+            # Ensure category column exists
+            if 'category' not in df.columns:
+                df['category'] = None
+            missing_idx = df[df['category'].isnull()].index.tolist()
+            if missing_idx:
+                print(f'Inferring categories for {len(missing_idx)} rows using LLM...')
+                uniq_texts = {}
+                for idx in missing_idx:
+                    t = (df.at[idx, 'text'] or '').strip()
+                    uniq_texts.setdefault(t, []).append(idx)
+                inferred_map = {}
+                for text, idxs in uniq_texts.items():
+                    if not text:
+                        for i in idxs:
+                            df.at[i, 'category'] = None
+                        continue
+                    guessed = _llm_infer_category_openai(text, categories_for_inference, model=llm_model, api_key=openai_key, base_url=llm_base)
+                    if guessed and guessed in categories_for_inference:
+                        for i in idxs:
+                            df.at[i, 'category'] = guessed
+                        # record inferred categories keyed by message id if available
+                        for i in idxs:
+                            mid = df.at[i, 'id'] if 'id' in df.columns else None
+                            if mid:
+                                inferred_map[str(mid)] = guessed
+                    else:
+                        for i in idxs:
+                            df.at[i, 'category'] = None
+                    time.sleep(1.0)
+
+                # Persist inferred categories back to DB (ai_metadata) when training from DB
+                if db_url and inferred_map:
+                    try:
+                        _persist_inferred_labels(db_url, inferred_map, model=llm_model, provider='llm')
+                    except Exception as e:
+                        print('Failed to persist inferred labels to DB:', e)
+
+    # proceed to feature building
     X_meta = meta_features(df)
     sent = SentenceTransformer(emb_model_name)
     X_emb = build_embeddings(sent, df['text'])
@@ -152,8 +333,14 @@ def train_and_save(csv_path, db_url, out_path, emb_model_name='all-MiniLM-L6-v2'
     print("Spam metrics:", "acc", accuracy_score(y_test_s, y_pred), "roc_auc", roc_auc_score(y_test_s, y_prob) if len(set(y_test_s))>1 else None, "f1", f1_score(y_test_s, y_pred, zero_division=0))
 
     # Category model
-    df['category'] = df.get('category', pd.Series('unknown', index=df.index)).fillna('unknown').astype(str)
-    categories = sorted(df['category'].unique())
+    # Fill missing categories with 'unknown' for training; if categories_override provided, use it as canonical set
+    if 'category' not in df.columns:
+        df['category'] = None
+    df['category'] = df['category'].fillna('unknown').astype(str)
+    if provided_categories:
+        categories = sorted(list(dict.fromkeys(provided_categories)))
+    else:
+        categories = sorted(df['category'].unique())
     # map categories to integer codes
     y_cat = df['category'].astype(pd.CategoricalDtype(categories=categories)).cat.codes.values
     # determine if stratified split is possible
@@ -195,5 +382,20 @@ if __name__ == '__main__':
     p.add_argument('--out', default='models/email_models.joblib')
     p.add_argument('--emb', default='all-MiniLM-L6-v2')
     p.add_argument('--db', default=os.environ.get('DATABASE_URL'))
+    p.add_argument('--use-llm', action='store_true', help='Use an LLM to infer missing categories for training (in-memory only)')
+    p.add_argument('--llm-model', default=os.environ.get('OPENAI_MODEL', 'gpt-3.5-turbo'), help='LLM model to use for inference')
+    p.add_argument('--llm-base', default=(os.environ.get('OPENAI_API_BASE') or os.environ.get('OLLAMA_URL')), help='LLM base URL (OpenAI-compatible base or Ollama URL)')
+    p.add_argument('--openai-key', default=os.environ.get('OPENAI_API_KEY'), help='OpenAI API key (or set OPENAI_API_KEY env)')
+    p.add_argument('--categories', default=None, help='Comma-separated list of categories to use (overrides categories discovered in data)')
     args = p.parse_args()
-    train_and_save(args.csv, args.db, args.out, emb_model_name=args.emb)
+    train_and_save(
+        args.csv,
+        args.db,
+        args.out,
+        emb_model_name=args.emb,
+        use_llm=bool(args.use_llm),
+        llm_model=args.llm_model,
+        openai_key=args.openai_key,
+        llm_base=args.llm_base,
+        categories_override=args.categories
+    )
