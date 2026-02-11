@@ -1874,16 +1874,12 @@ export default function Mail(){
               </Box>
 
               {messageDetail.aiSummary && (
-                <Box sx={{ mt: 1, p: 1.5, borderRadius: 1, bgcolor: (t) => t.palette.mode === 'dark' ? 'rgba(255,255,255,0.02)' : 'rgba(234,245,255,0.7)', border: (t) => `1px solid ${t.palette.mode === 'dark' ? 'rgba(255,255,255,0.03)' : 'rgba(26,115,232,0.08)'}` }}>
+                <Box sx={{ mt: 1, mb: 2, p: 1.5, borderRadius: 1, bgcolor: (t) => t.palette.mode === 'dark' ? 'rgba(255,255,255,0.02)' : 'rgba(234,245,255,0.7)', border: (t) => `1px solid ${t.palette.mode === 'dark' ? 'rgba(255,255,255,0.03)' : 'rgba(26,115,232,0.08)'}` }}>
                   <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
-                    <Typography variant="subtitle2">AI Overview</Typography>
+                    <Typography variant="subtitle2">AI Summary</Typography>
                   </Box>
                   <Box component="ul" sx={{ pl: 2, m: 0 }}>
-                    {(Array.isArray(messageDetail.aiSummary) ? messageDetail.aiSummary : String(messageDetail.aiSummary).split(/\n+/)).filter(Boolean).map((line: any, i: number) => (
-                      <li key={i} style={{ marginBottom: 6 }}>
-                        <Typography variant="body2" sx={{ display: 'inline' }}>{line}</Typography>
-                      </li>
-                    ))}
+                        <Typography variant="body2" sx={{ display: 'inline' }}>{messageDetail.aiSummary}</Typography>
                   </Box>
                 </Box>
               )}
