@@ -1,0 +1,2 @@
+-- Intentionally left blank. This migration was auto-generated during a schema mismatch.
+-- It has been replaced by aligning the Prisma schema to the existing SQL migrations.
