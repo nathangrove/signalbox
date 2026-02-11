@@ -36,7 +36,6 @@ import CloseIcon from '@mui/icons-material/Close'
 import ReplyIcon from '@mui/icons-material/Reply'
 import ForwardIcon from '@mui/icons-material/Forward'
 import ReportIcon from '@mui/icons-material/Report'
-import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown'
 import { isValid, parse } from 'date-fns'
 
 function categoryColor(category?: string | null) {
@@ -1109,18 +1108,10 @@ export default function Mail(){
     try {
       const nextSpam = !messageDetail.spam
       await updateMessageLabels(messageDetail.id, { spam: nextSpam })
-      // If marking as spam, also archive the message
-      if (nextSpam) {
-        try {
-          await setMessageArchived(messageDetail.id, true)
-        } catch (err) {
-          console.warn('archive after spam failed', err)
-        }
-      }
       const data = await getMessage(messageDetail.id)
       if (data) {
         setMessageDetail(data)
-        setMessages(prev => prev.map(m => m.id === data.id ? { ...m, category: data.category, spam: data.spam, archived: data.archived } : m))
+        setMessages(prev => prev.map(m => m.id === data.id ? { ...m, category: data.category, spam: data.spam } : m))
       }
     } catch (e) {
       console.warn('toggle spam failed', e)
@@ -1857,133 +1848,112 @@ export default function Mail(){
             ) : (
               <Typography variant="h6">{messageDetail.subject || '(no subject)'}</Typography>
             )}
-            <Box sx={{ width: '100%' }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
-                <Box>
-                  <Typography variant="body2" color="text.secondary">
-                    From: <span style={{ fontWeight: 700 }}>{(messageDetail?.fromHeader && Array.isArray(messageDetail.fromHeader) && messageDetail.fromHeader[0]?.name) || formatFrom(messageDetail.fromHeader)}</span>
-                    {" "}
-                    <span style={{ fontWeight: 400, color: 'inherit' }}>{(messageDetail?.fromHeader && Array.isArray(messageDetail.fromHeader) && `<${messageDetail.fromHeader[0]?.address}>`) || ''}</span>
-                  </Typography>
+            <Typography variant="body2" color="text.secondary">From: {formatFrom(messageDetail.fromHeader)}</Typography>
+            <Typography variant="body2" color="text.secondary">To: {formatRecipientsElements(messageDetail.toHeader || messageDetail.to)}</Typography>
+            {messageDetail.aiSummary && (
+              <Typography variant="body2" color="text.secondary">{messageDetail.aiSummary}</Typography>
+            )}
+            <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap', mt: 1, width: '100%' }}>
+              <FormControl size="small" sx={{ minWidth: 140 }}>
+                <InputLabel id="message-category-select">Category</InputLabel>
+                <Select
+                  labelId="message-category-select"
+                  value={messageDetail.category || ''}
+                  label="Category"
+                  onChange={(e: any) => handleUpdateMessageCategory(e.target.value || null)}
+                >
+                  <MenuItem value="">None</MenuItem>
+                  {['primary','updates','social','newsletters','promotions','other'].map(c => (
+                    <MenuItem key={c} value={c}>{c}</MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+
+              {parsedAiItinerary && parsedAiItinerary.length > 0 && (
+                <Box sx={{ mt: 1 }}>
+                  {parsedAiItinerary.map((ev: any, i: number) => (
+                    <Box key={i} sx={{ display: 'flex', gap: 1, alignItems: 'center', mb: 0.5 }}>
+                      <Chip label="Event" size="small" color="info" />
+                      <Typography variant="body2" sx={{ fontWeight: 600 }}>{ev.summary || 'Event'}</Typography>
+                      <Typography variant="body2" color="text.secondary">{ev.start ? new Date(ev.start).toLocaleString() : ''}{ev.end ? ` — ${new Date(ev.end).toLocaleString()}` : ''}</Typography>
+                    </Box>
+                  ))}
                 </Box>
-                <Typography variant="caption" color="text.secondary">{formatDate(messageDetail.internalDate)}</Typography>
+              )}
+
+              <Box sx={{ ml: 'auto', display: 'flex', gap: 1 }}>
+                <IconButton size="small" onClick={handleToggleSpam} title={messageDetail.spam ? 'Mark not spam' : 'Mark spam'}>
+                  <ReportIcon color={messageDetail.spam ? 'error' : 'inherit'} />
+                </IconButton>
+                <IconButton size="small" onClick={openForward} title="Forward">
+                  <ForwardIcon />
+                </IconButton>
+                <IconButton size="small" onClick={openReply} title="Reply">
+                  <ReplyIcon />
+                </IconButton>
               </Box>
 
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 }}>
-                <Typography variant="body2" color="text.secondary" sx={{ alignItems: 'center' }}>To: {formatRecipientsElements(messageDetail.toHeader || messageDetail.to)}</Typography>
-              </Box>
+              {parsedAiTracking && parsedAiTracking.length > 0 && (
+                <Box sx={{ mt: 1 }}>
+                  {parsedAiTracking.map((t: any, i: number) => (
+                    <Box key={i} sx={{ display: 'flex', gap: 1, alignItems: 'center', mb: 0.5 }}>
+                      <Chip label="Tracking" size="small" color="secondary" />
 
-              {messageDetail.aiSummary && (
-                <Box sx={{ mt: 1, p: 1.5, borderRadius: 1, bgcolor: (t) => t.palette.mode === 'dark' ? 'rgba(255,255,255,0.02)' : 'rgba(234,245,255,0.7)', border: (t) => `1px solid ${t.palette.mode === 'dark' ? 'rgba(255,255,255,0.03)' : 'rgba(26,115,232,0.08)'}` }}>
-                  <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
-                    <Typography variant="subtitle2">AI Overview</Typography>
-                  </Box>
-                  <Box component="ul" sx={{ pl: 2, m: 0 }}>
-                    {(Array.isArray(messageDetail.aiSummary) ? messageDetail.aiSummary : String(messageDetail.aiSummary).split(/\n+/)).filter(Boolean).map((line: any, i: number) => (
-                      <li key={i} style={{ marginBottom: 6 }}>
-                        <Typography variant="body2" sx={{ display: 'inline' }}>{line}</Typography>
-                      </li>
+                      {t.url ? (
+                        <a href={t.url} target="_blank" rel="noopener noreferrer" style={{ display: 'inline-flex', gap: 8, alignItems: 'center', textDecoration: 'none' }}>
+                          <Typography variant="body2" sx={{ fontWeight: 600, color: 'inherit' }}>{t.carrier || 'Shipment'}</Typography>
+                          {t.trackingNumber && <Typography variant="body2" sx={{ fontWeight: 600, color: 'primary.main' }}>{`• ${t.trackingNumber}`}</Typography>}
+                          <LaunchIcon fontSize="small" sx={{ color: 'text.secondary', ml: 0.5 }} />
+                        </a>
+                      ) : (
+                        <Typography variant="body2" sx={{ fontWeight: 600 }}>{t.carrier || 'Shipment'}{t.trackingNumber ? ` • ${t.trackingNumber}` : ''}</Typography>
+                      )}
+
+                      {t.deliveryDate && (
+                        <Typography variant="body2" color="text.secondary" sx={{ ml: 1 }}>{`Delivery: ${new Date(t.deliveryDate).toLocaleDateString()}`}</Typography>
+                      )}
+                    </Box>
+                  ))}
+                </Box>
+              )}
+
+              {parsedAiAction && (
+                <Tooltip title={parsedAiAction.reason || ''} arrow>
+                  <Chip label={`Action: ${parsedAiAction.type || 'none'}`} size="small" sx={{ mt: 1 }} />
+                </Tooltip>
+              )}
+
+              {messageDetail.attachments && messageDetail.attachments.length > 0 && (
+                <Box sx={{ display: 'grid', gap: 1, mt: 1 }}>
+                  <Typography variant="subtitle2">Attachments</Typography>
+                  <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
+                    {messageDetail.attachments.map((at: any) => (
+                      <Box key={at.id} sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+                        <Typography variant="body2" sx={{ fontWeight: 600 }}>{at.filename || 'Attachment'}</Typography>
+                        {at.sizeBytes ? <Typography variant="body2" color="text.secondary">{`${(Number(at.sizeBytes) / 1024).toFixed(1)} KB`}</Typography> : null}
+                        <IconButton size="small" onClick={async (e) => {
+                          e.stopPropagation();
+                          try {
+                            const blob = await downloadAttachment(messageDetail.id, at.id)
+                            const url = URL.createObjectURL(blob)
+                            const a = document.createElement('a')
+                            a.href = url
+                            a.download = at.filename || 'attachment'
+                            document.body.appendChild(a)
+                            a.click()
+                            a.remove()
+                            URL.revokeObjectURL(url)
+                          } catch (err) {
+                            console.warn('download failed', err)
+                          }
+                        }}>
+                          <LaunchIcon fontSize="small" />
+                        </IconButton>
+                      </Box>
                     ))}
                   </Box>
                 </Box>
               )}
-
-              <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap', mt: 1, width: '100%' }}>
-                <FormControl size="small" sx={{ minWidth: 140 }}>
-                  <InputLabel id="message-category-select">Category</InputLabel>
-                  <Select
-                    labelId="message-category-select"
-                    value={messageDetail.category || ''}
-                    label="Category"
-                    onChange={(e: any) => handleUpdateMessageCategory(e.target.value || null)}
-                  >
-                    <MenuItem value="">None</MenuItem>
-                    {['primary','updates','social','newsletters','promotions','other'].map(c => (
-                      <MenuItem key={c} value={c}>{c}</MenuItem>
-                    ))}
-                  </Select>
-                </FormControl>
-
-                <Box sx={{ ml: 'auto', display: 'flex', gap: 1 }}>
-                  <IconButton size="small" onClick={handleToggleSpam} title={messageDetail.spam ? 'Mark not spam' : 'Mark spam'}>
-                    <ReportIcon color={messageDetail.spam ? 'error' : 'inherit'} />
-                  </IconButton>
-                  <IconButton size="small" onClick={openForward} title="Forward">
-                    <ForwardIcon />
-                  </IconButton>
-                  <IconButton size="small" onClick={openReply} title="Reply">
-                    <ReplyIcon />
-                  </IconButton>
-                </Box>
-
-                {parsedAiItinerary && parsedAiItinerary.length > 0 && (
-                  <Box sx={{ mt: 1, width: '100%' }}>
-                    {parsedAiItinerary.map((ev: any, i: number) => (
-                      <Box key={i} sx={{ display: 'flex', gap: 1, alignItems: 'center', mb: 0.5 }}>
-                        <Chip label="Event" size="small" color="info" />
-                        <Typography variant="body2" sx={{ fontWeight: 600 }}>{ev.summary || 'Event'}</Typography>
-                        <Typography variant="body2" color="text.secondary">{ev.start ? new Date(ev.start).toLocaleString() : ''}{ev.end ? ` — ${new Date(ev.end).toLocaleString()}` : ''}</Typography>
-                      </Box>
-                    ))}
-                  </Box>
-                )}
-
-                {parsedAiTracking && parsedAiTracking.length > 0 && (
-                  <Box sx={{ mt: 1, width: '100%' }}>
-                    {parsedAiTracking.map((t: any, i: number) => (
-                      <Box key={i} sx={{ display: 'flex', gap: 1, alignItems: 'center', mb: 0.5 }}>
-                        <Chip label="Tracking" size="small" color="secondary" />
-
-                        {t.url ? (
-                          <a href={t.url} target="_blank" rel="noopener noreferrer" style={{ display: 'inline-flex', gap: 8, alignItems: 'center', textDecoration: 'none' }}>
-                            <Typography variant="body2" sx={{ fontWeight: 600, color: 'inherit' }}>{t.carrier || 'Shipment'}</Typography>
-                            {t.trackingNumber && <Typography variant="body2" sx={{ fontWeight: 600, color: 'primary.main' }}>{`• ${t.trackingNumber}`}</Typography>}
-                            <LaunchIcon fontSize="small" sx={{ color: 'text.secondary', ml: 0.5 }} />
-                          </a>
-                        ) : (
-                          <Typography variant="body2" sx={{ fontWeight: 600 }}>{t.carrier || 'Shipment'}{t.trackingNumber ? ` • ${t.trackingNumber}` : ''}</Typography>
-                        )}
-
-                        {t.deliveryDate && (
-                          <Typography variant="body2" color="text.secondary" sx={{ ml: 1 }}>{`Delivery: ${new Date(t.deliveryDate).toLocaleDateString()}`}</Typography>
-                        )}
-                      </Box>
-                    ))}
-                  </Box>
-                )}
-
-                {messageDetail.attachments && messageDetail.attachments.length > 0 && (
-                  <Box sx={{ display: 'grid', gap: 1, mt: 1, width: '100%' }}>
-                    <Typography variant="subtitle2">Attachments</Typography>
-                    <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
-                      {messageDetail.attachments.map((at: any) => (
-                        <Box key={at.id} sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
-                          <Typography variant="body2" sx={{ fontWeight: 600 }}>{at.filename || 'Attachment'}</Typography>
-                          {at.sizeBytes ? <Typography variant="body2" color="text.secondary">{`${(Number(at.sizeBytes) / 1024).toFixed(1)} KB`}</Typography> : null}
-                          <IconButton size="small" onClick={async (e) => {
-                            e.stopPropagation();
-                            try {
-                              const blob = await downloadAttachment(messageDetail.id, at.id)
-                              const url = URL.createObjectURL(blob)
-                              const a = document.createElement('a')
-                              a.href = url
-                              a.download = at.filename || 'attachment'
-                              document.body.appendChild(a)
-                              a.click()
-                              a.remove()
-                              URL.revokeObjectURL(url)
-                            } catch (err) {
-                              console.warn('download failed', err)
-                            }
-                          }}>
-                            <LaunchIcon fontSize="small" />
-                          </IconButton>
-                        </Box>
-                      ))}
-                    </Box>
-                  </Box>
-                )}
-              </Box>
             </Box>
 
             <Divider />
