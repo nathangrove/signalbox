@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import Login from './pages/Login'
-import Mail from './pages/Mail'
+import Mail from './pages/Mail/Mail'
 import { initSocket } from './socket'
 import { getMessage, getMailboxes } from './api'
 import AppBar from '@mui/material/AppBar'

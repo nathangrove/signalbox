@@ -171,7 +171,14 @@ async function classifyWithLLM(input: { subject: string; from: string; body: str
   }
 }
 
-const OPENAI_REQUEST_TIMEOUT_MS = Number(process.env.OPENAI_REQUEST_TIMEOUT_MS || 60 * 1000);
+// Increase default OpenAI request timeout to 5 minutes to reduce aborts on slow/local endpoints
+const OPENAI_REQUEST_TIMEOUT_MS = (() => {
+  const raw = process.env.OPENAI_REQUEST_TIMEOUT_MS;
+  const v = raw !== undefined && raw !== '' ? Number(raw) : NaN;
+  if (Number.isFinite(v) && v > 0) return v;
+  return 5 * 60 * 1000;
+})();
+console.log('[ai] OPENAI_REQUEST_TIMEOUT_MS=', OPENAI_REQUEST_TIMEOUT_MS);
 const OPENAI_MAX_RETRIES = Number(process.env.OPENAI_MAX_RETRIES || 2);
 const OPENAI_RETRY_BASE_MS = Number(process.env.OPENAI_RETRY_BASE_MS || 1000);
 
@@ -191,6 +198,7 @@ async function fetchWithTimeout(url: string, opts: any = {}, timeoutMs = OPENAI_
   let attempt = 0;
   while (true) {
     attempt++;
+    console.debug(`[ai] fetchWithTimeout starting attempt=${attempt} timeoutMs=${timeoutMs} url=${url}`);
     const controller = new AbortController();
     const id = setTimeout(() => controller.abort(), timeoutMs);
     try {

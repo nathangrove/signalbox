@@ -1,10 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { API_BASE } from '../api'
+import { API_BASE } from '../../api'
 import ReactQuill from 'react-quill'
 import 'react-quill/dist/quill.snow.css'
-import MessageIframe from '../components/MessageIframe'
-import { archiveCategoryAll, archiveCategoryAllByAccount, enqueueMessageAi, getAccounts, getMailboxes, getMessage, getMessages, getMessagesByAccount, markCategoryReadAll, markCategoryReadAllByAccount, markMessageRead, markMessageUnread, setMessageArchived, downloadAttachment, sendMessage, updateMessageLabels } from '../api'
-import { initSocket } from '../socket'
+import MessageIframe from './components/MessageIframe'
+import { archiveCategoryAll, archiveCategoryAllByAccount, enqueueMessageAi, getAccounts, getMailboxes, getMessage, getMessages, getMessagesByAccount, markCategoryReadAll, markCategoryReadAllByAccount, markMessageRead, markMessageUnread, setMessageArchived, downloadAttachment, sendMessage, updateMessageLabels } from '../../api'
+import { initSocket } from '../../socket'
 import Box from '@mui/material/Box'
 import Paper from '@mui/material/Paper'
 import Typography from '@mui/material/Typography'
@@ -24,10 +24,7 @@ import Drawer from '@mui/material/Drawer'
 import { useTheme } from '@mui/material/styles'
 import useMediaQuery from '@mui/material/useMediaQuery'
 import ArrowBackIcon from '@mui/icons-material/ArrowBack'
-import ArchiveIcon from '@mui/icons-material/Archive'
-import UnarchiveIcon from '@mui/icons-material/Unarchive'
 import LaunchIcon from '@mui/icons-material/Launch'
-import Tooltip from '@mui/material/Tooltip'
 import Menu from '@mui/material/Menu'
 import MenuItem from '@mui/material/MenuItem'
 import Fab from '@mui/material/Fab'
@@ -36,622 +33,12 @@ import CloseIcon from '@mui/icons-material/Close'
 import ReplyIcon from '@mui/icons-material/Reply'
 import ForwardIcon from '@mui/icons-material/Forward'
 import ReportIcon from '@mui/icons-material/Report'
-import { isValid, parse } from 'date-fns'
 
-function categoryColor(category?: string | null) {
-  switch ((category || '').toLowerCase()) {
-    case 'promotions': return 'warning'
-    case 'updates': return 'success'
-    case 'social': return 'info'
-    case 'other': return 'secondary'
-    case 'newsletters': return 'primary'
-    case 'primary': return 'default'
-    default: return 'default'
-  }
-}
 import TextField from '@mui/material/TextField'
 import * as DarkReader from 'darkreader'
-
-function formatFrom(fromHeader: any): string {
-  const list = Array.isArray(fromHeader) ? fromHeader : []
-  if (!list.length) return 'Unknown sender'
-  const first = list[0]
-  return first.name ? `${first.name} <${first.address}>` : first.address
-}
-
-function formatRecipients(toHeader: any): string {
-  try {
-    if (!toHeader) return ''
-    const list = Array.isArray(toHeader) ? toHeader : (typeof toHeader === 'string' ? [toHeader] : [])
-    const parts = list.map((t: any) => {
-      if (!t) return ''
-      if (typeof t === 'string') return t
-      return t.name ? `${t.name} <${t.address}>` : (t.address || '')
-    }).filter(Boolean)
-    if (!parts.length) return ''
-    const joined = parts.join(', ')
-    return joined.length > 80 ? joined.slice(0, 77) + '...' : joined
-  } catch (_) {
-    return ''
-  }
-}
-
-function formatRecipientsElements(toHeader: any) {
-  try {
-    const list = Array.isArray(toHeader) ? toHeader : (typeof toHeader === 'string' ? [{ address: toHeader }] : [])
-    const nodes = list.map((t: any, idx: number) => {
-      const email = typeof t === 'string' ? t : (t.address || '')
-      const name = typeof t === 'string' ? '' : (t.name || '')
-      const display = name ? name : email
-      return (
-        <React.Fragment key={idx}>
-          <Tooltip title={email} arrow>
-            <span style={{ fontWeight: 500 }}>{display}</span>
-          </Tooltip>
-          {idx < list.length - 1 ? ', ' : ''}
-        </React.Fragment>
-      )
-    })
-    return <>{nodes}</>
-  } catch (_) {
-    return null
-  }
-}
-
-function getSenderAddress(fromHeader: any): string | null {
-  const list = Array.isArray(fromHeader) ? fromHeader : []
-  if (!list.length) return null
-  const first = list[0]
-  return first.address || null
-}
-
-function formatDate(input?: string | Date | null) {
-  if (!input) return ''
-  const d = new Date(input)
-  return d.toLocaleString()
-}
-
-function timeAgo(input?: string | Date | null) {
-  if (!input) return ''
-  const then = new Date(input)
-  const now = new Date()
-  const diffSec = Math.floor((now.getTime() - then.getTime()) / 1000)
-  if (diffSec < 10) return 'just now'
-  if (diffSec < 60) return `${diffSec} seconds ago`
-  const diffMin = Math.floor(diffSec / 60)
-  if (diffMin < 60) return `${diffMin} minute${diffMin === 1 ? '' : 's'} ago`
-  const diffHours = Math.floor(diffMin / 60)
-  if (diffHours < 24) return `${diffHours} hour${diffHours === 1 ? '' : 's'} ago`
-  const diffDays = Math.floor(diffHours / 24)
-  if (diffDays < 7) return `${diffDays} day${diffDays === 1 ? '' : 's'} ago`
-  // fallback to date for older
-  return then.toLocaleString()
-}
-
-function stripTrackingPixels(html: string): string {
-  try {
-    const parser = new DOMParser()
-    const doc = parser.parseFromString(html, 'text/html')
-    const images = Array.from(doc.querySelectorAll('img'))
-
-    images.forEach(img => {
-      const widthAttr = img.getAttribute('width')
-      const heightAttr = img.getAttribute('height')
-      const style = img.getAttribute('style') || ''
-      const src = (img.getAttribute('src') || '').toLowerCase()
-
-      const width = widthAttr ? Number(widthAttr) : null
-      const height = heightAttr ? Number(heightAttr) : null
-
-      const isTiny = (width !== null && width <= 1) || (height !== null && height <= 1)
-      const styleTiny = /width\s*:\s*1px|height\s*:\s*1px|display\s*:\s*none/.test(style.toLowerCase())
-      const srcLooksLikePixel = /pixel|tracking|open\.gif|\/open\b|\/track\b|\/tracking\b/.test(src)
-      const dataGif = src.startsWith('data:image/gif')
-
-      if (isTiny || styleTiny || srcLooksLikePixel || dataGif) {
-        img.remove()
-      }
-    })
-
-    return doc.body.innerHTML
-  } catch (_) {
-    return html
-  }
-}
-
-function plainTextToHtml(text: string) {
-  try {
-    // decode any existing HTML entities, then escape and convert newlines to <br>
-    const dec = (() => {
-      const d = document.createElement('div')
-      d.innerHTML = text || ''
-      return d.textContent || d.innerText || ''
-    })()
-    const esc = String(dec)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-    const parts = esc.split('\n').map(p => `<div>${p}</div>`).join('')
-    return `<blockquote style="margin:0 0 8px 0;padding-left:12px;border-left:3px solid rgba(0,0,0,0.08);">${parts}</blockquote>`
-  } catch (_) {
-    return `<blockquote>${String(text).replace(/</g,'&lt;')}</blockquote>`
-  }
-}
-
-function htmlToPlainText(html: string) {
-  try {
-    const parser = new DOMParser()
-    const doc = parser.parseFromString(html, 'text/html')
-    const blockTags = new Set(['p', 'div', 'br', 'li', 'blockquote', 'tr', 'table', 'header', 'footer', 'section'])
-    const out: string[] = []
-
-    function walk(node: Node) {
-      if (node.nodeType === Node.TEXT_NODE) {
-        out.push((node as Text).textContent || '')
-        return
-      }
-      if (node.nodeType !== Node.ELEMENT_NODE) return
-      const el = node as HTMLElement
-      const tag = el.tagName.toLowerCase()
-      if (tag === 'br') {
-        out.push('\n')
-        return
-      }
-      const isBlock = blockTags.has(tag)
-      if (isBlock) out.push('\n')
-      for (const child of Array.from(el.childNodes)) walk(child)
-      if (isBlock) out.push('\n')
-    }
-
-    walk(doc.body)
-    // collapse multiple newlines and trim
-    return out.join('').replace(/\u00A0/g, ' ').replace(/\n{3,}/g, '\n\n').replace(/\s+$/g, '').trim()
-  } catch (_) {
-    return html.replace(/<[^>]+>/g, '')
-  }
-}
-
-function htmlQuote(html: string, meta: any) {
-  try {
-    // sanitize minimal tracking pixels and then wrap original HTML in a blockquote
-    const cleaned = stripTrackingPixels(html || '')
-    const parser = new DOMParser()
-    const doc = parser.parseFromString(cleaned, 'text/html')
-
-    const wrapper = document.createElement('div')
-    const header = document.createElement('div')
-    header.style.marginBottom = '8px'
-    header.style.color = 'rgba(0,0,0,0.6)'
-    header.textContent = `On ${formatDate(meta?.internalDate)} ${formatFrom(meta?.fromHeader)} wrote:`
-
-    const block = document.createElement('blockquote')
-    block.style.margin = '0'
-    block.style.paddingLeft = '12px'
-    block.style.borderLeft = '3px solid rgba(0,0,0,0.08)'
-
-    // move children from parsed body into blockquote
-    Array.from(doc.body.childNodes).forEach(n => block.appendChild(n.cloneNode(true)))
-
-    wrapper.appendChild(header)
-    wrapper.appendChild(block)
-    return wrapper.innerHTML
-  } catch (_) {
-    return `<blockquote>${String(html)}</blockquote>`
-  }
-}
-
-function buildQuotedOriginalHTML(msg: any) {
-  if (!msg) return ''
-  try {
-    if (msg.html) return htmlQuote(msg.html, msg)
-    // plain text fallback: include header and plainTextToHtml-wrapped body
-    const header = `<div style="margin-bottom:8px;color:rgba(0,0,0,0.6)">On ${formatDate(msg.internalDate)} ${formatFrom(msg.fromHeader)} wrote:</div>`
-    return header + plainTextToHtml(msg.text || msg.body || '')
-  } catch (_) {
-    return plainTextToHtml(msg.text || msg.body || '')
-  }
-}
-
-function splitPlainThread(text: string) {
-  if (!text) return []
-  let cleaned = text.replace(/\r/g, '')
-  // normalize common non-breaking spaces and similar unicode whitespace
-  cleaned = cleaned.replace(/[\u00A0\u202F\u2007]/g, ' ')
-  const lines = cleaned.split('\n')
-  const headerPatterns = [
-    /^\s*On\b.*wrote:$/i,
-    /^-{2,}\s*$/,
-    /^-----Original Message-----$/i,
-    /^From:\s.*$/i
-  ]
-  const isEmailLine = (ln: string) => /<\s*[^>\s]+@[^>\s]+\s*>/.test(ln) || /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(ln)
-  const extractEmail = (ln: string) => {
-    const match = ln.match(/<\s*([^>\s]+@[^>\s]+)\s*>/) || ln.match(/([^@\s]+@[^@\s]+\.[^@\s]+)/)
-    return match ? match[1] : ''
-  }
-  const isDateLine = (ln: string) => !!parseDateCandidate(ln)
-  const isLikelyNameLine = (ln: string) => !!ln && !isEmailLine(ln) && !isDateLine(ln) && ln.length <= 80
-
-  const segments: Array<{ header?: string; body: string }> = []
-  let currentLines: string[] = []
-  let currentHeader: string | undefined = undefined
-
-  const isHeader = (ln: string) => headerPatterns.some(p => p.test(ln.trim()))
-  const detectHeaderBlock = (startIndex: number) => {
-    const entries: Array<{ text: string; index: number }> = []
-    let j = startIndex
-    while (j < lines.length && entries.length < 4) {
-      const t = lines[j].trim()
-      if (t) entries.push({ text: t, index: j })
-      j += 1
-    }
-    if (!entries.length) return null
-    const dateEntry = entries.find(e => isDateLine(e.text))
-    if (!dateEntry) return null
-    const datePos = entries.indexOf(dateEntry)
-    if (datePos > 2) return null
-    const emailEntry = entries.find(e => isEmailLine(e.text))
-    const nameEntry = entries.find(e => isLikelyNameLine(e.text) && e.text !== dateEntry.text)
-    if (!emailEntry && !nameEntry) return null
-
-    const email = emailEntry ? extractEmail(emailEntry.text) : ''
-    const name = nameEntry ? nameEntry.text : ''
-    const who = name || email || 'Unknown'
-    const emailSuffix = email ? ` <${email}>` : ''
-    const header = `On ${dateEntry.text} ${who}${name ? emailSuffix : email ? emailSuffix : ''} wrote:`
-    return { header, endIndex: dateEntry.index }
-  }
-
-  for (let i = 0; i < lines.length; i++) {
-    const ln = lines[i]
-    if (isHeader(ln)) {
-      if (currentLines.length) {
-        segments.push({ header: currentHeader, body: currentLines.join('\n').trim() })
-      }
-      currentHeader = ln.trim()
-      currentLines = []
-      continue
-    }
-    const block = detectHeaderBlock(i)
-    if (block) {
-      if (currentLines.length) {
-        segments.push({ header: currentHeader, body: currentLines.join('\n').trim() })
-      }
-      currentHeader = block.header
-      currentLines = []
-      i = block.endIndex
-      continue
-    }
-    currentLines.push(ln)
-  }
-  if (currentLines.length) segments.push({ header: currentHeader, body: currentLines.join('\n').trim() })
-  return segments
-}
-
-function splitHtmlThread(html: string) {
-  if (!html) return []
-  try {
-    const parser = new DOMParser()
-    const doc = parser.parseFromString(html, 'text/html')
-    const body = doc.body
-    const normalize = (s: string) => s.replace(/[\u00A0\u202F\u2007]/g, ' ').trim()
-    const headerRe = /^\s*On\b.*wrote:\s*$/i
-    const originalMessageRe = /^-+\s*Original Message\s*-+$/i
-    const headerLabels = ['From', 'Sent', 'To', 'Subject', 'Cc', 'Date']
-    const headerLabelRe = new RegExp(`\\b(${headerLabels.join('|')})\\s*:\\s*`, 'gi')
-
-    const isHeaderText = (raw: string) => {
-      const text = normalize(raw)
-      if (!text) return false
-      if (headerRe.test(text)) return true
-      if (originalMessageRe.test(text)) return true
-      const matches = text.match(headerLabelRe)
-      if (matches && matches.length >= 2) return true
-      return false
-    }
-
-    const segments: Array<{ header?: string; bodyHtml: string }> = []
-    let currentNodes: Node[] = []
-    let currentHeader: string | undefined = undefined
-
-    const flushCurrent = () => {
-      if (!currentNodes.length) return
-      const container = doc.createElement('div')
-      currentNodes.forEach(n => container.appendChild(n.cloneNode(true)))
-      const htmlOut = container.innerHTML.trim()
-      if (htmlOut) segments.push({ header: currentHeader, bodyHtml: htmlOut })
-      currentNodes = []
-    }
-
-    const pushInnerParts = (innerParts: Array<{ header?: string; bodyHtml: string }>, inheritedHeader?: string) => {
-      if (!innerParts.length) return
-      const merged = innerParts.map(p => ({ ...p }))
-      if (inheritedHeader && !merged[0].header) merged[0].header = inheritedHeader
-      merged.forEach(p => segments.push({ header: p.header, bodyHtml: p.bodyHtml }))
-    }
-
-    const children = Array.from(body.childNodes)
-    for (const node of children) {
-      if (node.nodeType === Node.ELEMENT_NODE) {
-        const el = node as HTMLElement
-        const text = normalize(el.textContent || '')
-
-        // Gmail quote container: header in .gmail_attr and quoted body in blockquote
-        if (el.classList.contains('gmail_quote_container') || el.classList.contains('gmail_quote')) {
-          flushCurrent()
-          const headerEl = el.querySelector('.gmail_attr') as HTMLElement | null
-          const headerText = headerEl ? normalize(headerEl.textContent || '') : undefined
-          if (headerText && isHeaderText(headerText)) currentHeader = headerText
-
-          const quoteEl = el.querySelector('blockquote') as HTMLElement | null
-          if (quoteEl) {
-            const innerParts = splitHtmlThread(quoteEl.innerHTML)
-            if (innerParts.length) {
-              pushInnerParts(innerParts, currentHeader)
-              currentHeader = undefined
-            } else {
-              segments.push({ header: currentHeader, bodyHtml: quoteEl.outerHTML })
-              currentHeader = undefined
-            }
-          } else {
-            // fallback: use container html
-            segments.push({ header: currentHeader, bodyHtml: el.innerHTML })
-            currentHeader = undefined
-          }
-          continue
-        }
-
-        if (el.tagName.toLowerCase() === 'blockquote') {
-          flushCurrent()
-          const innerParts = splitHtmlThread(el.innerHTML)
-          if (innerParts.length) {
-            pushInnerParts(innerParts, currentHeader)
-            currentHeader = undefined
-          } else {
-            segments.push({ header: currentHeader, bodyHtml: el.outerHTML })
-            currentHeader = undefined
-          }
-          continue
-        }
-
-        if (text && isHeaderText(text)) {
-          flushCurrent()
-          currentHeader = text
-          continue
-        }
-      } else if (node.nodeType === Node.TEXT_NODE) {
-        const text = normalize(node.textContent || '')
-        if (text && isHeaderText(text)) {
-          flushCurrent()
-          currentHeader = text
-          continue
-        }
-      }
-
-      currentNodes.push(node)
-    }
-
-    flushCurrent()
-    return segments
-  } catch (_) {
-    return []
-  }
-}
-
-function parseDateCandidate(input: string): Date | null {
-  if (!input) return null
-  const cleaned = String(input).replace(/\s+/g, ' ').trim()
-  if (!cleaned) return null
-
-  const formats = [
-    "EEE, MMM d, yyyy 'at' h:mm a",
-    "EEE, MMM d, yyyy 'at' h:mma",
-    "EEE, MMM d, yyyy h:mm a",
-    "EEE, MMM d, yyyy",
-    "MMM d, yyyy 'at' h:mm a",
-    "MMM d, yyyy, h:mm a",
-    "M/d/yyyy, h:mm:ss a",
-    "M/d/yyyy, h:mm a",
-    "M/d/yy, h:mm a",
-    'M/d/yyyy',
-    'M/d/yy'
-  ]
-
-  for (const fmt of formats) {
-    const d = parse(cleaned, fmt, new Date())
-    if (isValid(d)) return d
-  }
-
-  const fallback = new Date(cleaned)
-  if (!Number.isNaN(fallback.getTime())) return fallback
-  return null
-}
-
-function parseThreadHeader(raw?: string) {
-  if (!raw) return { name: '', email: '', dateText: '' }
-  // strip common wrappers
-  let text = String(raw).replace(/^On\s+/i, '').replace(/\s*wrote:\s*$/i, '').trim()
-  text = text.replace(/[\u00A0\u202F\u2007]/g, ' ').replace(/\s+/g, ' ').trim()
-
-  const headerLabels = ['From', 'Sent', 'To', 'Subject', 'Cc', 'Date']
-  const fieldRe = (label: string) => new RegExp(`${label}\\s*:\\s*([\\s\\S]*?)(?=(?:${headerLabels.join('|')})\\s*:|$)`, 'i')
-
-  const extractField = (label: string) => {
-    const match = text.match(fieldRe(label))
-    return match ? match[1].trim() : ''
-  }
-
-  const parseNameEmail = (input: string) => {
-    if (!input) return { name: '', email: '' }
-    const emailMatch = input.match(/<\s*([^>\s]+@[^>\s]+)\s*>/)
-    const email = emailMatch ? emailMatch[1] : (input.match(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/) || [])[1] || ''
-    let name = input
-    if (email) name = name.replace(email, '')
-    name = name.replace(/[<>]/g, '').replace(/^[,;:\s]+|[,;:\s]+$/g, '').trim()
-    if (!name) name = email
-    return { name, email }
-  }
-
-  const fromField = extractField('From')
-  const sentField = extractField('Sent') || extractField('Date')
-  if (fromField || sentField) {
-    const parsed = parseNameEmail(fromField)
-    return {
-      name: parsed.name || parsed.email || 'Unknown',
-      email: parsed.email || '',
-      dateText: sentField || ''
-    }
-  }
-
-  // extract email if present
-  let email = ''
-  const emailMatch = text.match(/<\s*([^>\s]+@[^>\s]+)\s*>/)
-  if (emailMatch) email = emailMatch[1]
-  else {
-    const bare = text.match(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/)
-    if (bare) email = bare[1]
-  }
-
-  // tokenise by whitespace so we can locate date/name positions
-  const tokens = text.split(/\s+/).filter(Boolean)
-  const tokenCount = tokens.length
-  const emailIndex = email ? tokens.findIndex(t => t.includes(email) || t.replace(/[<>]/g, '') === email) : -1
-
-  // sliding window: find the longest contiguous token span that parses to a Date
-  let bestStart = -1
-  let bestEnd = -1
-  let bestCandidate = ''
-  for (let start = 0; start < tokenCount; start += 1) {
-    for (let end = start; end < Math.min(tokenCount, start + 12); end += 1) {
-      const candidate = tokens.slice(start, end + 1).join(' ').replace(/^[,;:\s]+|[,;:\s]+$/g, '')
-      if (!candidate) continue
-      const d = parseDateCandidate(candidate)
-      if (d) {
-        // prefer longer (more specific) matches
-        if (bestCandidate.length < candidate.length) {
-          bestCandidate = candidate
-          bestStart = start
-          bestEnd = end
-        }
-      }
-    }
-  }
-
-  let dateText = ''
-  let name = ''
-
-  if (bestStart !== -1) {
-    dateText = bestCandidate
-    // heuristics to pick a name nearby the date and/or email
-    if (email && emailIndex !== -1) {
-      if (emailIndex > bestEnd) {
-        name = tokens.slice(bestEnd + 1, emailIndex).join(' ')
-      } else if (emailIndex < bestStart) {
-        name = tokens.slice(emailIndex + 1, bestStart).join(' ')
-      } else {
-        name = tokens.slice(bestEnd + 1).join(' ')
-      }
-    } else {
-      // no email: take what's after the date (common pattern)
-      name = tokens.slice(bestEnd + 1).join(' ')
-    }
-  } else {
-    // no date found: try to pull a name around an email or use the whole text
-    if (email && emailIndex !== -1) {
-      // tokens before the email are commonly the name
-      name = tokens.slice(0, emailIndex).join(' ')
-    } else {
-      name = text
-    }
-  }
-
-  name = (name || '').replace(/^[,;:\s]+|[,;:\s]+$/g, '').replace(/[<>]/g, '').trim()
-  if (email && (!name || /\d/.test(name))) name = email
-  if (!name) name = email || 'Unknown'
-
-  return { name, email, dateText: dateText || '' }
-}
-
-function formatThreadDate(input?: string) {
-  if (!input) return ''
-  const parsed = parseDateCandidate(input)
-  if (parsed) return parsed.toLocaleString()
-  const d = new Date(input)
-  if (Number.isNaN(d.getTime())) return input
-  return d.toLocaleString()
-}
-
-function buildThreadItemsFromPlain(text: string, fallback: { name: string; email?: string; dateText?: string }) {
-  const parts = splitPlainThread(text)
-  if (!parts || !parts.length) return []
-  return parts.map((p, idx) => {
-    const headerInfo = p.header ? parseThreadHeader(p.header) : { name: fallback.name, email: fallback.email || '', dateText: fallback.dateText || '' }
-    return {
-      id: `${idx}-${headerInfo.email || headerInfo.name}`,
-      header: p.header,
-      name: headerInfo.name,
-      email: headerInfo.email,
-      dateText: headerInfo.dateText,
-      bodyText: p.body,
-      bodyHtml: undefined as string | undefined
-    }
-  })
-}
-
-function buildThreadItemsFromHtml(html: string, fallback: { name: string; email?: string; dateText?: string }) {
-  const parts = splitHtmlThread(html)
-  if (!parts || !parts.length) return []
-  return parts.map((p, idx) => {
-    const headerInfo = p.header ? parseThreadHeader(p.header) : { name: fallback.name, email: fallback.email || '', dateText: fallback.dateText || '' }
-    return {
-      id: `${idx}-${headerInfo.email || headerInfo.name}`,
-      header: p.header,
-      name: headerInfo.name,
-      email: headerInfo.email,
-      dateText: headerInfo.dateText,
-      bodyText: undefined as string | undefined,
-      bodyHtml: p.bodyHtml
-    }
-  })
-}
-
-function blockRemoteImages(html: string): { html: string; blockedCount: number } {
-  try {
-    const parser = new DOMParser()
-    const doc = parser.parseFromString(html, 'text/html')
-    const images = Array.from(doc.querySelectorAll('img'))
-    let blocked = 0
-
-    images.forEach(img => {
-      const src = (img.getAttribute('src') || '').trim()
-      const isRemote = /^https?:\/\//i.test(src)
-      if (isRemote) {
-        img.setAttribute('data-remote-src', src)
-        img.removeAttribute('src')
-        img.setAttribute('alt', img.getAttribute('alt') || 'Remote image blocked')
-        img.setAttribute('style', `${img.getAttribute('style') || ''}; opacity:0.6; border:1px dashed #c0c0c0; min-height:12px;`)
-        blocked += 1
-      }
-    })
-
-    return { html: doc.body.innerHTML, blockedCount: blocked }
-  } catch (_) {
-    return { html, blockedCount: 0 }
-  }
-}
-
-function loadPrefs<T>(key: string, fallback: T): T {
-  try {
-    const raw = localStorage.getItem(key)
-    return raw ? JSON.parse(raw) as T : fallback
-  } catch (_) {
-    return fallback
-  }
-}
-
-function savePrefs<T>(key: string, value: T) {
-  localStorage.setItem(key, JSON.stringify(value))
-}
+import MessageListPanel from './components/MessageListPanel'
+import { formatFrom, formatRecipientsElements, getSenderAddress, formatDate, stripTrackingPixels, plainTextToHtml, buildQuotedOriginalHTML, blockRemoteImages } from '../../utils'
+import { loadPrefs, savePrefs } from '../../utils/prefs'
 
 export default function Mail(){
   const [accounts, setAccounts] = useState<any[]>([])
@@ -1108,10 +495,21 @@ export default function Mail(){
     try {
       const nextSpam = !messageDetail.spam
       await updateMessageLabels(messageDetail.id, { spam: nextSpam })
+      // If marking as spam, also archive the message
+      if (nextSpam) {
+        try {
+          // Use the client helper so the UI removes the message from the current list
+          await setMessageArchivedClient(messageDetail.id, true)
+          // already removed from list and selection cleared by helper
+          return
+        } catch (err) {
+          console.warn('archive after spam failed', err)
+        }
+      }
       const data = await getMessage(messageDetail.id)
       if (data) {
         setMessageDetail(data)
-        setMessages(prev => prev.map(m => m.id === data.id ? { ...m, category: data.category, spam: data.spam } : m))
+        setMessages(prev => prev.map(m => m.id === data.id ? { ...m, category: data.category, spam: data.spam, archived: data.archived } : m))
       }
     } catch (e) {
       console.warn('toggle spam failed', e)
@@ -1654,186 +1052,112 @@ export default function Mail(){
         )}
       </Paper>
 
-      <Paper sx={{ p: 1.5, overflow: 'auto', display: isMobile && mobileView === 'message' ? 'none' : 'block' }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
-          <Box>
-            <Typography variant="subtitle2" sx={{ color: 'text.secondary' }}>{mailboxTitle}</Typography>
-            {selectedMailbox?.lastCheckedAt && <Typography variant="caption" color="text.secondary">{`Synced: ${timeAgo(selectedMailbox.lastCheckedAt)}`}</Typography>}
-          </Box>
-        </Box>
-        {!isMobile && (
-          <TextField
-            size="small"
-            placeholder="Search mail"
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            fullWidth
-            sx={{ mb: 1 }}
-          />
-        )}
-        {loadingMessages && messages.length === 0 ? <CircularProgress size={24} /> : messages.length === 0 ? (
-          <Typography color="text.secondary" sx={{ py: 2 }}>Nothing to see here.</Typography>
-        ) : (
-          <List dense>
-            {(() => {
-              const order = [
-                { key: 'today', label: 'Today' },
-                { key: 'yesterday', label: 'Yesterday' },
-                { key: 'last7', label: 'Past 7 days' },
-                { key: 'older', label: 'Older' }
-              ]
+      <MessageListPanel
+        isMobile={isMobile}
+        mobileView={mobileView}
+        setMobileView={setMobileView}
+        mailboxTitle={mailboxTitle}
+        selectedMailbox={selectedMailbox}
+        loadingMessages={loadingMessages}
+        messages={messages}
+        search={search}
+        setSearch={setSearch}
+        groupedMessagesByDate={groupedMessagesByDate}
+        selectedMessage={selectedMessage}
+        setSelectedMessage={setSelectedMessage}
+        replaceRoute={replaceRoute}
+        setContextMenu={setContextMenu}
+        setCategoryMenu={setCategoryMenu}
+        hasMore={hasMore}
+        loadMoreRef={loadMoreRef}
+        enqueueMessageAi={enqueueMessageAi}
+        getMessage={getMessage}
+        setMessages={setMessages}
+        setAiProcessing={setAiProcessing}
+        setMessageArchivedClient={setMessageArchivedClient}
+        markMessageUnread={markMessageUnread}
+        setMessageDetail={setMessageDetail}
+        pageSize={pageSize}
+      />
 
-              return order.map(section => {
-                const list = groupedMessagesByDate[section.key] || []
-                if (!list.length) return null
-                return (
-                  <React.Fragment key={section.key}>
-                    <ListSubheader sx={{ bgcolor: 'transparent', mt: 1, pl: 0, fontWeight: 600 }}>{section.label}</ListSubheader>
-                    {list.map((msg: any) => {
-                      const unread = !(msg.read === true || (Array.isArray(msg.flags) ? msg.flags.includes('\\Seen') : false))
-                      return (
-                        <React.Fragment key={msg.id}>
-                          <ListItemButton
-                            selected={selectedMessage?.id === msg.id}
-                            onClick={() => { setSelectedMessage(msg); replaceRoute(selectedMailbox?.id || null, selectedCategory || null); if (isMobile) setMobileView('message') }}
-                            onContextMenu={(e) => { e.preventDefault(); setContextMenu({ mouseX: e.clientX - 2, mouseY: e.clientY - 4, id: msg.id }) }}
-                            alignItems="flex-start"
-                          >
-                            <ListItemText
-                              primaryTypographyProps={{ fontWeight: unread ? (theme.palette.mode === 'dark' ? 700 : 600) : 400 }}
-                              primary={msg.subject || '(no subject)'}
-                              secondary={
-                                <span>
-                                  {formatFrom(msg.fromHeader)}
-                                  <br />
-                                  {(msg.toHeader || msg.to) ? (
-                                    <span style={{ color: 'rgba(0,0,0,0.6)' }}>To: {formatRecipientsElements(msg.toHeader || msg.to)}</span>
-                                  ) : null}
-                                  {(msg.toHeader || msg.to) ? <br /> : null}
-                                  {formatDate(msg.internalDate)}
-                                </span>
-                              }
-                            />
-                            {msg.category && (
-                              <Tooltip title={msg.categoryReason || ''} arrow>
-                                <Chip
-                                  label={msg.category}
-                                  size="small"
-                                  color={categoryColor(msg.category) as any}
-                                  sx={{ ml: 1, textTransform: 'capitalize' }}
-                                />
-                              </Tooltip>
-                            )}
-                                  {msg.hasItinerary && (
-                              <Chip label="Event" size="small" color="info" sx={{ ml: 1 }} />
-                            )}
-                            {msg.hasTracking && (
-                              <Chip label="Tracking" size="small" color="secondary" sx={{ ml: 1 }} />
-                            )}
-                            {msg.spam && (
-                              <Chip
-                                label="Spam"
-                                size="small"
-                                color="error"
-                                sx={{ ml: 1, fontWeight: 600 }}
-                              />
-                            )}
+      {/* Context menu for messages (opened from MessageListPanel) */}
+      <Menu
+        open={!!contextMenu}
+        onClose={() => setContextMenu(null)}
+        anchorReference="anchorPosition"
+        anchorPosition={contextMenu ? { top: contextMenu.mouseY, left: contextMenu.mouseX } : undefined}
+      >
+        <MenuItem onClick={async () => {
+          if (!contextMenu) return setContextMenu(null)
+          setContextMenu(null)
+          try {
+            const id = contextMenu.id
+            setSelectedMessage({ id })
+            const data = await getMessage(id)
+            if (data) setMessageDetail(data)
+            if (isMobile) setMobileView('message')
+          } catch (e) { console.warn('open from context failed', e) }
+        }}>Open</MenuItem>
+        <MenuItem onClick={async () => {
+          if (!contextMessage) return setContextMenu(null)
+          setContextMenu(null)
+          try { await setMessageArchivedClient(contextMessage.id, !contextMessage.archived) } catch (e) { console.warn('archive from context failed', e) }
+        }}>{contextMessage?.archived ? 'Unarchive' : 'Archive'}</MenuItem>
+        <MenuItem onClick={async () => {
+          if (!contextMessage) return setContextMenu(null)
+          setContextMenu(null)
+          try {
+            await markMessageUnread(contextMessage.id)
+            setMessages(prev => prev.map(m => m.id === contextMessage.id ? { ...m, read: false } : m))
+          } catch (e) { console.warn('mark unread failed', e) }
+        }}>Mark unread</MenuItem>
+        <MenuItem onClick={async () => {
+          if (!contextMenu) return setContextMenu(null)
+          setContextMenu(null)
+          try {
+            const id = contextMenu.id
+            setSelectedMessage({ id })
+            const data = await getMessage(id)
+            if (data) setMessageDetail(data)
+            openReply()
+          } catch (e) { console.warn('reply from context failed', e) }
+        }}>Reply</MenuItem>
+        <MenuItem onClick={async () => {
+          if (!contextMenu) return setContextMenu(null)
+          setContextMenu(null)
+          try {
+            const id = contextMenu.id
+            setSelectedMessage({ id })
+            const data = await getMessage(id)
+            if (data) setMessageDetail(data)
+            openForward()
+          } catch (e) { console.warn('forward from context failed', e) }
+        }}>Forward</MenuItem>
+        <MenuItem onClick={async () => {
+          if (!contextMessage) return setContextMenu(null)
+          setContextMenu(null)
+          try { await enqueueMessageAi(contextMessage.id) } catch (e) { console.warn('enqueue ai failed', e) }
+        }}>AI summary</MenuItem>
+      </Menu>
 
-                            {/* Archive control */}
-                            <IconButton size="small" sx={{ ml: 1 }} disabled={msg.archived} onClick={e => {
-                              e.stopPropagation();
-                              const id = msg.id;
-                              const archived = !msg.archived;
-                              setMessageArchivedClient(id, archived);
-                            }}
-                            >
-                              {msg.archived ? <UnarchiveIcon fontSize="small" /> : <ArchiveIcon fontSize="small" />}
-                            </IconButton>
-                          </ListItemButton>
-                          <Divider component="li" />
-                        </React.Fragment>
-                      )
-                    })}
-                  </React.Fragment>
-                )
-              })
-            })()}
-            {hasMore && <Box ref={loadMoreRef} sx={{ height: 32 }} />}
-
-            <Menu
-              open={!!contextMenu}
-              onClose={() => setContextMenu(null)}
-              anchorReference="anchorPosition"
-              anchorPosition={contextMenu ? { top: contextMenu.mouseY, left: contextMenu.mouseX } : undefined}
-            >
-              <MenuItem onClick={async () => {
-                if (!contextMenu) return setContextMenu(null)
-                const id = contextMenu.id
-                setContextMenu(null)
-                try {
-                  setAiProcessing(true)
-                  await enqueueMessageAi(id)
-                  // optimistically mark category may update; refresh list item if it's visible
-                  const updated = await getMessage(id).catch(() => null)
-                  if (updated) {
-                    setMessages(prev => prev.map(m => m.id === id ? { ...m, category: updated.category, spam: updated.spam } : m))
-                    if (selectedMessage?.id === id) setMessageDetail(updated)
-                  }
-                } finally { setAiProcessing(false) }
-              }}>Run AI</MenuItem>
-
-              {contextMessage?.archived && (
-                <MenuItem onClick={async () => {
-                  if (!contextMenu) return setContextMenu(null)
-                  const id = contextMenu.id
-                  setContextMenu(null)
-                  // unarchive
-                  await setMessageArchived(id, false)
-                  setMessages(prev => prev.map(m => m.id === id ? { ...m, archived: false } : m))
-                  if (selectedMessage?.id === id) {
-                    const data = await getMessage(id).catch(() => null)
-                    if (data) { setMessageDetail(data); setSelectedMessage(data) }
-                  }
-                }}>{'Unarchive'}</MenuItem>
-              )}
-
-              {contextMessage?.read && (
-                <MenuItem onClick={async () => {
-                  if (!contextMenu) return setContextMenu(null)
-                  const id = contextMenu.id
-                  setContextMenu(null)
-                  try {
-                    await markMessageUnread(id)
-                    setMessages(prev => prev.map(m => m.id === id ? { ...m, read: false } : m))
-                    if (selectedMessage?.id === id) setMessageDetail((d:any) => d ? { ...d, read: false } : d)
-                  } catch (e) {
-                    console.warn('mark unread failed', e)
-                  }
-                }}>{'Mark as Unread'}</MenuItem>
-              )}
-            </Menu>
-
-            <Menu
-              open={!!categoryMenu}
-              onClose={() => setCategoryMenu(null)}
-              anchorReference="anchorPosition"
-              anchorPosition={categoryMenu ? { top: categoryMenu.mouseY, left: categoryMenu.mouseX } : undefined}
-            >
-              <MenuItem onClick={async () => {
-                const target = categoryMenu ? { mailboxId: categoryMenu.mailboxId, accountId: categoryMenu.accountId, category: categoryMenu.category } : null
-                setCategoryMenu(null)
-                await handleCategoryMarkAllRead(target)
-              }}>Mark all as read</MenuItem>
-              <MenuItem onClick={async () => {
-                const target = categoryMenu ? { mailboxId: categoryMenu.mailboxId, accountId: categoryMenu.accountId, category: categoryMenu.category } : null
-                setCategoryMenu(null)
-                await handleCategoryArchiveAll(target)
-              }}>Archive all</MenuItem>
-            </Menu>
-          </List>
-        )}
-      </Paper>
-
+      {/* Category menu (opened from folder/category list) */}
+      <Menu
+        open={!!categoryMenu}
+        onClose={() => setCategoryMenu(null)}
+        anchorReference="anchorPosition"
+        anchorPosition={categoryMenu ? { top: categoryMenu.mouseY, left: categoryMenu.mouseX } : undefined}
+      >
+        <MenuItem onClick={async () => {
+          const target = categoryMenu ? { mailboxId: (categoryMenu as any).mailboxId, accountId: (categoryMenu as any).accountId, category: categoryMenu.category } : null
+          setCategoryMenu(null)
+          try { await handleCategoryMarkAllRead(target) } catch (e) { console.warn('mark all read failed', e) }
+        }}>Mark all read</MenuItem>
+        <MenuItem onClick={async () => {
+          const target = categoryMenu ? { mailboxId: (categoryMenu as any).mailboxId, accountId: (categoryMenu as any).accountId, category: categoryMenu.category } : null
+          setCategoryMenu(null)
+          try { await handleCategoryArchiveAll(target) } catch (e) { console.warn('archive all failed', e) }
+        }}>Archive all</MenuItem>
+      </Menu>
       <Paper sx={{ p: 2, overflowY: 'hidden', overflowX: 'hidden', display: isMobile && mobileView !== 'message' ? 'none' : 'flex', flexDirection: 'column' }}>
         {loadingMessage && <CircularProgress size={24} />}
         {!loadingMessage && messageDetail && (
@@ -1848,112 +1172,129 @@ export default function Mail(){
             ) : (
               <Typography variant="h6">{messageDetail.subject || '(no subject)'}</Typography>
             )}
-            <Typography variant="body2" color="text.secondary">From: {formatFrom(messageDetail.fromHeader)}</Typography>
-            <Typography variant="body2" color="text.secondary">To: {formatRecipientsElements(messageDetail.toHeader || messageDetail.to)}</Typography>
-            {messageDetail.aiSummary && (
-              <Typography variant="body2" color="text.secondary">{messageDetail.aiSummary}</Typography>
-            )}
-            <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap', mt: 1, width: '100%' }}>
-              <FormControl size="small" sx={{ minWidth: 140 }}>
-                <InputLabel id="message-category-select">Category</InputLabel>
-                <Select
-                  labelId="message-category-select"
-                  value={messageDetail.category || ''}
-                  label="Category"
-                  onChange={(e: any) => handleUpdateMessageCategory(e.target.value || null)}
-                >
-                  <MenuItem value="">None</MenuItem>
-                  {['primary','updates','social','newsletters','promotions','other'].map(c => (
-                    <MenuItem key={c} value={c}>{c}</MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
-
-              {parsedAiItinerary && parsedAiItinerary.length > 0 && (
-                <Box sx={{ mt: 1 }}>
-                  {parsedAiItinerary.map((ev: any, i: number) => (
-                    <Box key={i} sx={{ display: 'flex', gap: 1, alignItems: 'center', mb: 0.5 }}>
-                      <Chip label="Event" size="small" color="info" />
-                      <Typography variant="body2" sx={{ fontWeight: 600 }}>{ev.summary || 'Event'}</Typography>
-                      <Typography variant="body2" color="text.secondary">{ev.start ? new Date(ev.start).toLocaleString() : ''}{ev.end ? ` — ${new Date(ev.end).toLocaleString()}` : ''}</Typography>
-                    </Box>
-                  ))}
+            <Box sx={{ width: '100%' }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+                <Box>
+                  <Typography variant="body2" color="text.secondary">
+                    From: <span style={{ fontWeight: 700 }}>{(messageDetail?.fromHeader && Array.isArray(messageDetail.fromHeader) && messageDetail.fromHeader[0]?.name) || formatFrom(messageDetail.fromHeader)}</span>
+                    {" "}
+                    <span style={{ fontWeight: 400, color: 'inherit' }}>{(messageDetail?.fromHeader && Array.isArray(messageDetail.fromHeader) && `<${messageDetail.fromHeader[0]?.address}>`) || ''}</span>
+                  </Typography>
                 </Box>
-              )}
-
-              <Box sx={{ ml: 'auto', display: 'flex', gap: 1 }}>
-                <IconButton size="small" onClick={handleToggleSpam} title={messageDetail.spam ? 'Mark not spam' : 'Mark spam'}>
-                  <ReportIcon color={messageDetail.spam ? 'error' : 'inherit'} />
-                </IconButton>
-                <IconButton size="small" onClick={openForward} title="Forward">
-                  <ForwardIcon />
-                </IconButton>
-                <IconButton size="small" onClick={openReply} title="Reply">
-                  <ReplyIcon />
-                </IconButton>
+                <Typography variant="caption" color="text.secondary">{formatDate(messageDetail.internalDate)}</Typography>
               </Box>
 
-              {parsedAiTracking && parsedAiTracking.length > 0 && (
-                <Box sx={{ mt: 1 }}>
-                  {parsedAiTracking.map((t: any, i: number) => (
-                    <Box key={i} sx={{ display: 'flex', gap: 1, alignItems: 'center', mb: 0.5 }}>
-                      <Chip label="Tracking" size="small" color="secondary" />
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 }}>
+                <Typography variant="body2" color="text.secondary" sx={{ alignItems: 'center' }}>To: {formatRecipientsElements(messageDetail.toHeader || messageDetail.to)}</Typography>
+              </Box>
 
-                      {t.url ? (
-                        <a href={t.url} target="_blank" rel="noopener noreferrer" style={{ display: 'inline-flex', gap: 8, alignItems: 'center', textDecoration: 'none' }}>
-                          <Typography variant="body2" sx={{ fontWeight: 600, color: 'inherit' }}>{t.carrier || 'Shipment'}</Typography>
-                          {t.trackingNumber && <Typography variant="body2" sx={{ fontWeight: 600, color: 'primary.main' }}>{`• ${t.trackingNumber}`}</Typography>}
-                          <LaunchIcon fontSize="small" sx={{ color: 'text.secondary', ml: 0.5 }} />
-                        </a>
-                      ) : (
-                        <Typography variant="body2" sx={{ fontWeight: 600 }}>{t.carrier || 'Shipment'}{t.trackingNumber ? ` • ${t.trackingNumber}` : ''}</Typography>
-                      )}
-
-                      {t.deliveryDate && (
-                        <Typography variant="body2" color="text.secondary" sx={{ ml: 1 }}>{`Delivery: ${new Date(t.deliveryDate).toLocaleDateString()}`}</Typography>
-                      )}
-                    </Box>
-                  ))}
-                </Box>
-              )}
-
-              {parsedAiAction && (
-                <Tooltip title={parsedAiAction.reason || ''} arrow>
-                  <Chip label={`Action: ${parsedAiAction.type || 'none'}`} size="small" sx={{ mt: 1 }} />
-                </Tooltip>
-              )}
-
-              {messageDetail.attachments && messageDetail.attachments.length > 0 && (
-                <Box sx={{ display: 'grid', gap: 1, mt: 1 }}>
-                  <Typography variant="subtitle2">Attachments</Typography>
-                  <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
-                    {messageDetail.attachments.map((at: any) => (
-                      <Box key={at.id} sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
-                        <Typography variant="body2" sx={{ fontWeight: 600 }}>{at.filename || 'Attachment'}</Typography>
-                        {at.sizeBytes ? <Typography variant="body2" color="text.secondary">{`${(Number(at.sizeBytes) / 1024).toFixed(1)} KB`}</Typography> : null}
-                        <IconButton size="small" onClick={async (e) => {
-                          e.stopPropagation();
-                          try {
-                            const blob = await downloadAttachment(messageDetail.id, at.id)
-                            const url = URL.createObjectURL(blob)
-                            const a = document.createElement('a')
-                            a.href = url
-                            a.download = at.filename || 'attachment'
-                            document.body.appendChild(a)
-                            a.click()
-                            a.remove()
-                            URL.revokeObjectURL(url)
-                          } catch (err) {
-                            console.warn('download failed', err)
-                          }
-                        }}>
-                          <LaunchIcon fontSize="small" />
-                        </IconButton>
-                      </Box>
-                    ))}
+              {messageDetail.aiSummary && (
+                <Box sx={{ mt: 1, mb: 2, p: 1.5, borderRadius: 1, bgcolor: (t) => t.palette.mode === 'dark' ? 'rgba(255,255,255,0.02)' : 'rgba(234,245,255,0.7)', border: (t) => `1px solid ${t.palette.mode === 'dark' ? 'rgba(255,255,255,0.03)' : 'rgba(26,115,232,0.08)'}` }}>
+                  <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
+                    <Typography variant="subtitle2">AI Summary</Typography>
+                  </Box>
+                  <Box component="ul" sx={{ pl: 2, m: 0 }}>
+                        <Typography variant="body2" sx={{ display: 'inline' }}>{messageDetail.aiSummary}</Typography>
                   </Box>
                 </Box>
               )}
+
+              <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap', mt: 1, width: '100%' }}>
+                <FormControl size="small" sx={{ minWidth: 140 }}>
+                  <InputLabel id="message-category-select">Category</InputLabel>
+                  <Select
+                    labelId="message-category-select"
+                    value={messageDetail.category || ''}
+                    label="Category"
+                    onChange={(e: any) => handleUpdateMessageCategory(e.target.value || null)}
+                  >
+                    <MenuItem value="">None</MenuItem>
+                    {['primary','updates','social','newsletters','promotions','other'].map(c => (
+                      <MenuItem key={c} value={c}>{c}</MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+
+                <Box sx={{ ml: 'auto', display: 'flex', gap: 1 }}>
+                  <IconButton size="small" onClick={handleToggleSpam} title={messageDetail.spam ? 'Mark not spam' : 'Mark spam'}>
+                    <ReportIcon color={messageDetail.spam ? 'error' : 'inherit'} />
+                  </IconButton>
+                  <IconButton size="small" onClick={openForward} title="Forward">
+                    <ForwardIcon />
+                  </IconButton>
+                  <IconButton size="small" onClick={openReply} title="Reply">
+                    <ReplyIcon />
+                  </IconButton>
+                </Box>
+
+                {parsedAiItinerary && parsedAiItinerary.length > 0 && (
+                  <Box sx={{ mt: 1, width: '100%' }}>
+                    {parsedAiItinerary.map((ev: any, i: number) => (
+                      <Box key={i} sx={{ display: 'flex', gap: 1, alignItems: 'center', mb: 0.5 }}>
+                        <Chip label="Event" size="small" color="info" />
+                        <Typography variant="body2" sx={{ fontWeight: 600 }}>{ev.summary || 'Event'}</Typography>
+                        <Typography variant="body2" color="text.secondary">{ev.start ? new Date(ev.start).toLocaleString() : ''}{ev.end ? ` — ${new Date(ev.end).toLocaleString()}` : ''}</Typography>
+                      </Box>
+                    ))}
+                  </Box>
+                )}
+
+                {parsedAiTracking && parsedAiTracking.length > 0 && (
+                  <Box sx={{ mt: 1, width: '100%' }}>
+                    {parsedAiTracking.map((t: any, i: number) => (
+                      <Box key={i} sx={{ display: 'flex', gap: 1, alignItems: 'center', mb: 0.5 }}>
+                        <Chip label="Tracking" size="small" color="secondary" />
+
+                        {t.url ? (
+                          <a href={t.url} target="_blank" rel="noopener noreferrer" style={{ display: 'inline-flex', gap: 8, alignItems: 'center', textDecoration: 'none' }}>
+                            <Typography variant="body2" sx={{ fontWeight: 600, color: 'inherit' }}>{t.carrier || 'Shipment'}</Typography>
+                            {t.trackingNumber && <Typography variant="body2" sx={{ fontWeight: 600, color: 'primary.main' }}>{`• ${t.trackingNumber}`}</Typography>}
+                            <LaunchIcon fontSize="small" sx={{ color: 'text.secondary', ml: 0.5 }} />
+                          </a>
+                        ) : (
+                          <Typography variant="body2" sx={{ fontWeight: 600 }}>{t.carrier || 'Shipment'}{t.trackingNumber ? ` • ${t.trackingNumber}` : ''}</Typography>
+                        )}
+
+                        {t.deliveryDate && (
+                          <Typography variant="body2" color="text.secondary" sx={{ ml: 1 }}>{`Delivery: ${new Date(t.deliveryDate).toLocaleDateString()}`}</Typography>
+                        )}
+                      </Box>
+                    ))}
+                  </Box>
+                )}
+
+                {messageDetail.attachments && messageDetail.attachments.length > 0 && (
+                  <Box sx={{ display: 'grid', gap: 1, mt: 1, width: '100%' }}>
+                    <Typography variant="subtitle2">Attachments</Typography>
+                    <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
+                      {messageDetail.attachments.map((at: any) => (
+                        <Box key={at.id} sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+                          <Typography variant="body2" sx={{ fontWeight: 600 }}>{at.filename || 'Attachment'}</Typography>
+                          {at.sizeBytes ? <Typography variant="body2" color="text.secondary">{`${(Number(at.sizeBytes) / 1024).toFixed(1)} KB`}</Typography> : null}
+                          <IconButton size="small" onClick={async (e) => {
+                            e.stopPropagation();
+                            try {
+                              const blob = await downloadAttachment(messageDetail.id, at.id)
+                              const url = URL.createObjectURL(blob)
+                              const a = document.createElement('a')
+                              a.href = url
+                              a.download = at.filename || 'attachment'
+                              document.body.appendChild(a)
+                              a.click()
+                              a.remove()
+                              URL.revokeObjectURL(url)
+                            } catch (err) {
+                              console.warn('download failed', err)
+                            }
+                          }}>
+                            <LaunchIcon fontSize="small" />
+                          </IconButton>
+                        </Box>
+                      ))}
+                    </Box>
+                  </Box>
+                )}
+              </Box>
             </Box>
 
             <Divider />
