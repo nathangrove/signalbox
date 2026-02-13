@@ -113,10 +113,17 @@ export default function Mail(){
     try {
       const parts = window.location.pathname.split('/').filter(Boolean)
       // expecting ['mail', mailboxId, category?]
-      if (parts[0] !== 'mail') return { mailboxId: null, category: null }
+      if (parts[0] !== 'mail') return { mailboxId: null, category: null, messageId: null }
       const mailboxId = parts[1] || null
+      // support /mail/:mailboxId/message/:messageId
+      if (parts[2] === 'message') {
+        const messageId = parts[3] || null
+        return { mailboxId, category: null, messageId }
+      }
       const category = parts[2] && parts[2] !== 'all' ? decodeURIComponent(parts[2]) : null
-      return { mailboxId, category }
+      // optional messageId could follow as 3rd segment
+      const messageId = parts[3] || null
+      return { mailboxId, category, messageId }
     } catch (_) { return { mailboxId: null, category: null } }
   }
 
@@ -124,21 +131,26 @@ export default function Mail(){
     const mb = mailboxId ? encodeURIComponent(String(mailboxId)) : ''
     const cat = category ? encodeURIComponent(String(category)) : 'all'
     let path = '/mail'
-    if (mb) path += `/${mb}`
-    else return path
+    if (!mb) return path
+    path += `/${mb}`
     path += `/${cat}`
     return path
   }
 
-  function replaceRoute(mailboxId?: string | null, category?: string | null) {
-    const path = buildRoute(mailboxId, category)
+  function buildMessageRoute(mailboxId?: string | null, messageId?: string | null) {
+    if (!mailboxId || !messageId) return buildRoute(mailboxId || null, null)
+    return `/mail/${encodeURIComponent(String(mailboxId))}/message/${encodeURIComponent(String(messageId))}`
+  }
+
+  function replaceRoute(mailboxId?: string | null, category?: string | null, messageId?: string | null) {
+    const path = messageId ? buildMessageRoute(mailboxId, messageId) : buildRoute(mailboxId, category)
     try { window.history.pushState({}, '', path) } catch (_) { window.location.hash = path }
   }
 
   // initial route sync when mailboxes are loaded; prefer selected account's mailbox
   useEffect(() => {
     if (!mailboxes || !mailboxes.length) return
-    const { mailboxId, category } = parseRoute()
+    const { mailboxId, category, messageId } = parseRoute()
     if (mailboxId) {
       const mb = mailboxes.find(b => b.id === mailboxId)
       if (mb) setSelectedMailbox(mb)
@@ -151,21 +163,37 @@ export default function Mail(){
     }
     // do not default to a category; respect route or leave null for all
     setSelectedCategory(category || null)
+    if (messageId) {
+      setOpenMessageRequest({ messageId, mailboxId: mailboxId || undefined })
+    }
   }, [mailboxes, selectedAccountId])
 
   // handle browser back/forward
   useEffect(() => {
     const onPop = () => {
-      const { mailboxId, category } = parseRoute()
+      const { mailboxId, category, messageId } = parseRoute()
       if (mailboxId && mailboxes && mailboxes.length) {
         const mb = mailboxes.find(b => b.id === mailboxId)
         if (mb) setSelectedMailbox(mb)
       }
       setSelectedCategory(category)
+
+      // update mobile view when user navigates with browser/device back button
+      if (isMobile) {
+        setMobileView(messageId ? 'message' : 'list')
+      }
+
+      if (messageId) {
+        setOpenMessageRequest({ messageId, mailboxId: mailboxId || undefined })
+      } else {
+        // when there's no messageId in the route ensure message detail is cleared
+        setSelectedMessage(null)
+        setMessageDetail(null)
+      }
     }
     window.addEventListener('popstate', onPop)
     return () => window.removeEventListener('popstate', onPop)
-  }, [mailboxes])
+  }, [mailboxes, isMobile])
 
   useEffect(() => {
     if (!selectedMailbox) return
@@ -345,8 +373,8 @@ export default function Mail(){
       try{
         const data = await getMessage(selectedMessage.id)
         setMessageDetail(data)
-        // update route (message ID is no longer included)
-        replaceRoute(selectedMailbox?.id || null, selectedCategory || null)
+        // update route to include message id
+        replaceRoute(selectedMailbox?.id || null, selectedCategory || null, data?.id || null)
         // start read timer: if opened for >2s mark as read
         if (data && !data.read) {
           if (readTimer) clearTimeout(readTimer)
@@ -564,7 +592,7 @@ export default function Mail(){
           setMessageDetail(null)
         }
         // update route to remove message id
-        replaceRoute(selectedMailbox?.id || null, selectedCategory || null)
+        replaceRoute(selectedMailbox?.id || null, selectedCategory || null, null)
       } else {
         // when unarchiving (likely seen via search results), keep it visible and update state
         setMessages(prev => prev.map(m => m.id === id ? { ...m, archived: false } : m))
@@ -574,7 +602,7 @@ export default function Mail(){
             const data = await getMessage(id)
             setMessageDetail(data)
             setSelectedMessage(data)
-            replaceRoute(selectedMailbox?.id || null, selectedCategory || null)
+            replaceRoute(selectedMailbox?.id || null, selectedCategory || null, null)
           } catch (e) {
             console.warn('failed to refresh message after unarchive', e)
           }
@@ -844,12 +872,12 @@ export default function Mail(){
                   const acc = accounts.find(a => a.id === val)
                   if (acc) {
                     const firstBox = mailboxes.find(b => b.accountId === acc.id)
-                    if (firstBox) {
+                      if (firstBox) {
                       setSelectedMailbox(firstBox)
                       setSelectedCategory(null)
                       setSelectedMessage(null)
                       setMessageDetail(null)
-                      try { replaceRoute(firstBox.id, null) } catch (_) {}
+                      try { replaceRoute(firstBox.id, null, null) } catch (_) {}
                     }
                   }
                 } else {
@@ -857,7 +885,7 @@ export default function Mail(){
                   setSelectedCategory(null)
                   setSelectedMessage(null)
                   setMessageDetail(null)
-                  try { replaceRoute(null, null) } catch (_) {}
+                  try { replaceRoute(null, null, null) } catch (_) {}
                 }
                 setDrawerOpen(false)
                 setMobileView('list')
@@ -909,7 +937,7 @@ export default function Mail(){
                               setSelectedMailbox(firstBox)
                               const nextCategory = label === 'All' ? null : label
                               setSelectedCategory(nextCategory)
-                              replaceRoute(firstBox.id, nextCategory)
+                              replaceRoute(firstBox.id, nextCategory, null)
                               setDrawerOpen(false)
                               setMobileView('list')
                             }}
@@ -923,7 +951,7 @@ export default function Mail(){
                         <div key={b.id}>
                           <ListItemButton
                             selected={selectedMailbox?.id === b.id}
-                            onClick={() => { setSelectedMailbox(b); setSelectedCategory(null); replaceRoute(b.id, null); setDrawerOpen(false); setMobileView('list') }}
+                            onClick={() => { setSelectedMailbox(b); setSelectedCategory(null); replaceRoute(b.id, null, null); setDrawerOpen(false); setMobileView('list') }}
                           >
                             <ListItemText primary={b.name} primaryTypographyProps={{ fontSize: '0.9rem', fontWeight: 600, color: 'text.secondary' }} />
                             {b.unreadCount > 0 && <Chip label={b.unreadCount} size="small" color="primary" />}
@@ -955,12 +983,12 @@ export default function Mail(){
                 const acc = accounts.find(a => a.id === val)
                 if (acc) {
                   const firstBox = mailboxes.find(b => b.accountId === acc.id)
-                  if (firstBox) {
+                    if (firstBox) {
                     setSelectedMailbox(firstBox)
                     setSelectedCategory(null)
                     setSelectedMessage(null)
                     setMessageDetail(null)
-                    try { replaceRoute(firstBox.id, null) } catch (_) {}
+                    try { replaceRoute(firstBox.id, null, null) } catch (_) {}
                     if (isMobile) { setDrawerOpen(false); setMobileView('list') }
                   }
                 }
@@ -970,7 +998,7 @@ export default function Mail(){
                 setSelectedCategory(null)
                 setSelectedMessage(null)
                 setMessageDetail(null)
-                try { replaceRoute(null, null) } catch (_) {}
+                try { replaceRoute(null, null, null) } catch (_) {}
               }
             }}
           >
@@ -1023,7 +1051,7 @@ export default function Mail(){
                               setSelectedMailbox(firstBox)
                               const nextCategory = label === 'All' ? null : label
                               setSelectedCategory(nextCategory)
-                              replaceRoute(firstBox.id, nextCategory)
+                              replaceRoute(firstBox.id, nextCategory, null)
                               if (isMobile) { setDrawerOpen(false); setMobileView('list') }
                             }}
                         >
@@ -1037,7 +1065,7 @@ export default function Mail(){
                       <div key={b.id}>
                         <ListItemButton
                           selected={selectedMailbox?.id === b.id}
-                          onClick={() => { setSelectedMailbox(b); setSelectedCategory(null); replaceRoute(b.id, null); if (isMobile) { setDrawerOpen(false); setMobileView('list') } }}
+                          onClick={() => { setSelectedMailbox(b); setSelectedCategory(null); replaceRoute(b.id, null, null); if (isMobile) { setDrawerOpen(false); setMobileView('list') } }}
                         >
                           <ListItemText primary={b.name} primaryTypographyProps={{ fontSize: '0.9rem', fontWeight: 600, color: 'text.secondary' }} />
                           {b.unreadCount > 0 && <Chip label={b.unreadCount} size="small" color="primary" />}
@@ -1164,7 +1192,7 @@ export default function Mail(){
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, flex: 1, minHeight: 0 }}>
             {isMobile ? (
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <IconButton size="small" onClick={() => { setSelectedMessage(null); setMessageDetail(null); setMobileView('list'); replaceRoute(selectedMailbox?.id || null, selectedCategory || null) }}>
+                <IconButton size="small" onClick={() => { setSelectedMessage(null); setMessageDetail(null); setMobileView('list'); replaceRoute(selectedMailbox?.id || null, selectedCategory || null, null) }}>
                   <ArrowBackIcon />
                 </IconButton>
                 <Typography variant="h6" sx={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{messageDetail.subject || '(no subject)'}</Typography>

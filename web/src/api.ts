@@ -87,9 +87,30 @@ export async function updateMessageLabels(messageId: string, payload: { category
   return res.json();
 }
 
+// lightweight client-side cache / in-flight dedupe for dashboard to avoid duplicate network requests
+const DASHBOARD_CACHE_TTL_MS = Number(import.meta.env.VITE_DASHBOARD_CACHE_TTL_MS || 5 * 1000);
+let _dashboardCache: { data?: any; fetchedAt?: number; promise?: Promise<any> } = {};
+
 export async function getDashboard() {
-  const res = await fetch(`${API_BASE}/dashboard`, { headers: { ...authHeader() } });
-  return res.json();
+  const now = Date.now();
+  if (_dashboardCache.data && _dashboardCache.fetchedAt && (now - _dashboardCache.fetchedAt) < DASHBOARD_CACHE_TTL_MS) {
+    return _dashboardCache.data;
+  }
+  if (_dashboardCache.promise) return _dashboardCache.promise;
+
+  _dashboardCache.promise = (async () => {
+    try {
+      const res = await fetch(`${API_BASE}/dashboard`, { headers: { ...authHeader() } });
+      const json = await res.json();
+      _dashboardCache.data = json;
+      _dashboardCache.fetchedAt = Date.now();
+      return json;
+    } finally {
+      _dashboardCache.promise = undefined;
+    }
+  })();
+
+  return _dashboardCache.promise;
 }
 
 export async function enqueueMessageAi(id: string) {

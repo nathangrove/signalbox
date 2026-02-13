@@ -38,7 +38,7 @@ This repository contains the components needed to run Signalbox end-to-end: a Re
 
 - **Standard IMAP**: syncs with most email providers via IMAP for fetching and keeping accounts in sync.
 - **Google OAuth (IMAP)**: first-class support for Gmail accounts using OAuth-based authentication and IMAP access.
-- **LLM providers**: cloud LLMs (OpenAI) and local hosting via Ollama are supported for generating concise summaries and other AI features. Configure the provider and credentials via the server environment (e.g. `OPENAI_API_KEY`, `OLLAMA_URL`).
+- **LLM providers**: cloud LLMs (OpenAI), GitHub Copilot (via Copilot REST API), and local hosting via Ollama are supported. Use `OPENAI_MODEL` for OpenAI models and `COPILOT_MODEL` to override Copilot; `OPENAI_PARSE_MODEL`/`OPENAI_SUMMARY_MODEL` are deprecated. Configure credentials via environment variables (e.g. `OPENAI_API_KEY`, `COPILOT_API_KEY`, `OLLAMA_URL`) and use `LLM_PROVIDER` to prefer `copilot` when needed.
 
 ## Quick start (frontend)
 

@@ -52,6 +52,140 @@ export default function MessageListPanel(props: any) {
     pageSize
   } = props
 
+  // Per-row component so each message can manage its own touch state
+  function MessageRow({ msg }: { msg: any }) {
+    const [tx, setTx] = React.useState(0)
+    const [dragging, setDragging] = React.useState(false)
+    const startX = React.useRef<number | null>(null)
+    const startY = React.useRef<number | null>(null)
+    const threshold = 80 // px to trigger toggle
+
+    const onTouchStart = (e: React.TouchEvent) => {
+      if (!isMobile) return
+      const t = e.touches[0]
+      startX.current = t.clientX
+      startY.current = t.clientY
+      setDragging(true)
+    }
+
+    const onTouchMove = (e: React.TouchEvent) => {
+      if (!dragging || startX.current === null) return
+      const t = e.touches[0]
+      const dx = t.clientX - startX.current
+      const dy = startY.current ? Math.abs(t.clientY - startY.current) : 0
+      // if vertical scroll is larger, don't treat as horizontal swipe
+      if (dy > Math.abs(dx)) return
+      e.preventDefault()
+      // allow horizontal drag both ways (we'll toggle archive on release)
+      const limited = Math.max(Math.min(dx, 120), -160)
+      setTx(limited)
+    }
+
+    const onTouchEnd = () => {
+      if (!dragging) return
+      setDragging(false)
+      if (Math.abs(tx) >= threshold) {
+        // any horizontal swipe beyond threshold toggles archived state
+        setMessageArchivedClient(msg.id, !msg.archived)
+        setTx(0)
+      } else {
+        // reset
+        setTx(0)
+      }
+    }
+
+    // Show the same action icon regardless of swipe direction because swipe either way toggles
+    const actionIsUnarchive = !!msg.archived
+    const bgColor = actionIsUnarchive ? '#2e7d32' : '#1976d2'
+    const ActionIcon = actionIsUnarchive ? UnarchiveIcon : ArchiveIcon
+
+    return (
+      <React.Fragment key={msg.id}>
+        <div
+          onTouchStart={onTouchStart}
+          onTouchMove={onTouchMove}
+          onTouchEnd={onTouchEnd}
+          style={{ position: 'relative', overflow: 'hidden' }}
+        >
+          {/* background action indicator (appears from whichever side the user swipes) */}
+          <div style={{
+            position: 'absolute',
+            right: 0,
+            top: 0,
+            bottom: 0,
+            width: '100%',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: tx < 0 ? 'flex-end' : 'flex-start',
+            padding: '0 16px',
+            pointerEvents: 'none',
+            color: '#fff',
+            background: tx === 0 ? 'transparent' : bgColor,
+            transition: dragging ? 'none' : 'background 150ms ease'
+          }}>
+            {tx !== 0 ? <ActionIcon /> : null}
+          </div>
+
+          <div style={{ transform: `translateX(${tx}px)`, transition: dragging ? 'none' : 'transform 180ms cubic-bezier(.2,.8,.2,1)' }}>
+            <ListItemButton
+              selected={selectedMessage?.id === msg.id}
+              onClick={() => { setSelectedMessage(msg); replaceRoute(selectedMailbox?.id || null, null, msg.id); if (isMobile) setMobileView('message') }}
+              onContextMenu={(e) => { e.preventDefault(); setContextMenu({ mouseX: e.clientX - 2, mouseY: e.clientY - 4, id: msg.id }) }}
+              alignItems="flex-start"
+            >
+              <ListItemText
+                primaryTypographyProps={{ fontWeight: !(msg.read === true || (Array.isArray(msg.flags) ? msg.flags.includes('\\Seen') : false)) ? 600 : 400 }}
+                primary={msg.subject || '(no subject)'}
+                secondary={
+                  <span>
+                    {formatFrom(msg.fromHeader)}
+                    <br />
+                    {(msg.toHeader || msg.to) ? (
+                      <span style={{ color: 'rgba(0,0,0,0.6)' }}>To: {formatRecipientsElements(msg.toHeader || msg.to)}</span>
+                    ) : null}
+                    {(msg.toHeader || msg.to) ? <br /> : null}
+                    {formatDate(msg.internalDate)}
+                  </span>
+                }
+              />
+
+              {msg.category && (
+                <Chip
+                  label={msg.category}
+                  size="small"
+                  color={categoryColor(msg.category) as any}
+                  sx={{ ml: 1, textTransform: 'capitalize' }}
+                />
+              )}
+              {msg.hasItinerary && (
+                <Chip label="Event" size="small" color="info" sx={{ ml: 1 }} />
+              )}
+              {msg.hasTracking && (
+                <Chip label="Tracking" size="small" color="secondary" sx={{ ml: 1 }} />
+              )}
+              {msg.spam && (
+                <Chip
+                  label="Spam"
+                  size="small"
+                  color="error"
+                  sx={{ ml: 1, fontWeight: 600 }}
+                />
+              )}
+
+              <IconButton size="small" sx={{ ml: 1 }} disabled={msg.archived} onClick={e => {
+                e.stopPropagation();
+                const id = msg.id; const archived = !msg.archived; setMessageArchivedClient(id, archived);
+              }}>
+                {msg.archived ? <UnarchiveIcon fontSize="small" /> : <ArchiveIcon fontSize="small" />}
+              </IconButton>
+            </ListItemButton>
+          </div>
+        </div>
+        <Divider component="li" />
+      </React.Fragment>
+    )
+  }
+
   return (
     <Paper sx={{ p: 1.5, overflow: 'auto', display: isMobile && mobileView === 'message' ? 'none' : 'block' }}>
       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
@@ -89,63 +223,7 @@ export default function MessageListPanel(props: any) {
                 <React.Fragment key={section.key}>
                   <ListSubheader sx={{ bgcolor: 'transparent', mt: 1, pl: 0, fontWeight: 600 }}>{section.label}</ListSubheader>
                   {list.map((msg: any) => {
-                    const unread = !(msg.read === true || (Array.isArray(msg.flags) ? msg.flags.includes('\\Seen') : false))
-                    return (
-                      <React.Fragment key={msg.id}>
-                        <ListItemButton
-                          selected={selectedMessage?.id === msg.id}
-                          onClick={() => { setSelectedMessage(msg); replaceRoute(selectedMailbox?.id || null, null); if (isMobile) setMobileView('message') }}
-                          onContextMenu={(e) => { e.preventDefault(); setContextMenu({ mouseX: e.clientX - 2, mouseY: e.clientY - 4, id: msg.id }) }}
-                          alignItems="flex-start"
-                        >
-                          <ListItemText
-                            primaryTypographyProps={{ fontWeight: unread ? 600 : 400 }}
-                            primary={msg.subject || '(no subject)'}
-                            secondary={
-                              <span>
-                                {formatFrom(msg.fromHeader)}
-                                <br />
-                                {(msg.toHeader || msg.to) ? (
-                                  <span style={{ color: 'rgba(0,0,0,0.6)' }}>To: {formatRecipientsElements(msg.toHeader || msg.to)}</span>
-                                ) : null}
-                                {(msg.toHeader || msg.to) ? <br /> : null}
-                                {formatDate(msg.internalDate)}
-                              </span>
-                            }
-                          />
-                          {msg.category && (
-                            <Chip
-                              label={msg.category}
-                              size="small"
-                              color={categoryColor(msg.category) as any}
-                              sx={{ ml: 1, textTransform: 'capitalize' }}
-                            />
-                          )}
-                          {msg.hasItinerary && (
-                            <Chip label="Event" size="small" color="info" sx={{ ml: 1 }} />
-                          )}
-                          {msg.hasTracking && (
-                            <Chip label="Tracking" size="small" color="secondary" sx={{ ml: 1 }} />
-                          )}
-                          {msg.spam && (
-                            <Chip
-                              label="Spam"
-                              size="small"
-                              color="error"
-                              sx={{ ml: 1, fontWeight: 600 }}
-                            />
-                          )}
-
-                          <IconButton size="small" sx={{ ml: 1 }} disabled={msg.archived} onClick={e => {
-                            e.stopPropagation();
-                            const id = msg.id; const archived = !msg.archived; setMessageArchivedClient(id, archived);
-                          }}>
-                            {msg.archived ? <UnarchiveIcon fontSize="small" /> : <ArchiveIcon fontSize="small" />}
-                          </IconButton>
-                        </ListItemButton>
-                        <Divider component="li" />
-                      </React.Fragment>
-                    )
+                    return <MessageRow key={msg.id} msg={msg} />
                   })}
                 </React.Fragment>
               )

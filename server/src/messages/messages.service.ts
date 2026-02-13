@@ -229,9 +229,9 @@ export class MessagesService {
     next.modified_at = new Date().toISOString();
 
     if (metaRows && metaRows[0]) {
-      await this.prisma.$queryRaw`UPDATE ai_metadata SET labels = ${JSON.stringify(next)}::jsonb, model = ${process.env.OPENAI_MODEL || 'gpt-4o-mini'}, provider = ${process.env.OPENAI_API_BASE ? 'openai-compatible' : 'openai'} WHERE id = ${metaRows[0].id}`;
+      await this.prisma.$queryRaw`UPDATE ai_metadata SET labels = ${JSON.stringify(next)}::jsonb, model = ${process.env.COPILOT_MODEL || process.env.OPENAI_MODEL || 'gpt-4o-mini'}, provider = ${process.env.COPILOT_API_KEY ? (process.env.COPILOT_API_BASE ? 'copilot-compatible' : 'copilot') : (process.env.OPENAI_API_BASE ? 'openai-compatible' : 'openai') } WHERE id = ${metaRows[0].id}`;
     } else {
-      await this.prisma.$queryRaw`INSERT INTO ai_metadata (message_id, model, provider, labels, created_at) VALUES (${messageId}, ${process.env.OPENAI_MODEL || 'pending'}, ${process.env.OPENAI_API_BASE ? 'openai-compatible' : 'openai'}, ${JSON.stringify(next)}::jsonb, now())`;
+      await this.prisma.$queryRaw`INSERT INTO ai_metadata (message_id, model, provider, labels, created_at) VALUES (${messageId}, ${process.env.OPENAI_MODEL || 'pending'}, ${process.env.COPILOT_API_KEY ? (process.env.COPILOT_API_BASE ? 'copilot-compatible' : 'copilot') : (process.env.OPENAI_API_BASE ? 'openai-compatible' : 'openai') }, ${JSON.stringify(next)}::jsonb, now())`;
     }
 
     try {

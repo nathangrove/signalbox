@@ -122,14 +122,17 @@ function extractJson(text: string): any | null {
 }
 
 async function classifyWithLLM(input: { subject: string; from: string; body: string }) {
-  const base = (process.env.OPENAI_API_BASE || 'https://api.openai.com/v1').replace(/\/$/, '');
+  // Support multiple LLM providers (OpenAI-compatible or GitHub Copilot via env)
+  const llmProvider = (process.env.LLM_PROVIDER || '').toLowerCase();
+  const useCopilot = llmProvider === 'copilot' || !!process.env.COPILOT_API_KEY;
+  const base = (useCopilot ? (process.env.COPILOT_API_BASE || 'https://models.github.ai/inference') : (process.env.OPENAI_API_BASE || 'https://api.openai.com/v1')).replace(/\/$/, '');
   const url = `${base}/chat/completions`;
-  const model = process.env.OPENAI_PARSE_MODEL || 'gpt-4o-mini';
-  const apiKey = process.env.OPENAI_API_KEY;
+  const model = useCopilot ? (process.env.COPILOT_MODEL || process.env.OPENAI_MODEL || 'gpt-4o-mini') : (process.env.OPENAI_MODEL || 'gpt-4o-mini');
+  const apiKey = useCopilot ? process.env.COPILOT_API_KEY : process.env.OPENAI_API_KEY;
 
   const messages = buildClassifierMessages(input);
 
-  console.log(`[ai] classifyWithLLM calling model=${model} url=${url}`);
+  console.log(`[ai] classifyWithLLM calling provider=${useCopilot? 'copilot' : 'openai'} model=${model} url=${url}`);
   let res;
   try {
     res = await fetchWithTimeout(url, {
@@ -138,7 +141,7 @@ async function classifyWithLLM(input: { subject: string; from: string; body: str
         'Content-Type': 'application/json',
         ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {})
       },
-      body: JSON.stringify({ model, messages, temperature: 0.1 })
+      body: JSON.stringify({ model, messages })// , temperature: 0.1 })
     }, OPENAI_REQUEST_TIMEOUT_MS);
   } catch (fetchErr) {
     console.error('[ai] classifyWithLLM fetch error', fetchErr);
@@ -179,6 +182,17 @@ const OPENAI_REQUEST_TIMEOUT_MS = (() => {
   return 5 * 60 * 1000;
 })();
 console.log('[ai] OPENAI_REQUEST_TIMEOUT_MS=', OPENAI_REQUEST_TIMEOUT_MS);
+
+// Label recorded in DB for which external provider was used
+const LLM_PROVIDER_LABEL = (() => {
+  if (process.env.COPILOT_API_KEY) return process.env.COPILOT_API_BASE ? 'copilot-compatible' : 'copilot';
+  return process.env.OPENAI_API_BASE ? 'openai-compatible' : 'openai';
+})();
+// Canonical model string used when recording which model produced AI metadata
+const LLM_MODEL = (() => {
+  if (process.env.COPILOT_API_KEY) return process.env.COPILOT_MODEL || process.env.OPENAI_MODEL || 'gpt-4o-mini';
+  return process.env.OPENAI_MODEL || 'gpt-4o-mini';
+})();
 const OPENAI_MAX_RETRIES = Number(process.env.OPENAI_MAX_RETRIES || 2);
 const OPENAI_RETRY_BASE_MS = Number(process.env.OPENAI_RETRY_BASE_MS || 1000);
 
@@ -311,7 +325,7 @@ export const aiJobProcessor = async (job: any) => {
           tracking = NULL,
           events = NULL,
           model = ${process.env.OPENAI_MODEL || 'gpt-4o-mini'},
-          provider = ${process.env.OPENAI_API_BASE ? 'openai-compatible' : 'openai'},
+          provider = ${LLM_PROVIDER_LABEL},
           raw_response = ${JSON.stringify(result)}::jsonb
       WHERE id = ${aiMetadataId}`;
 
@@ -356,14 +370,16 @@ export const aiWorkerOptions: Partial<WorkerOptions> = {
 
 // New processor: summarize message and determine recommended action (reply, click link, mark_read, archive, etc.)
 async function summarizeAndActionWithLLM(input: { subject: string; from: string; body: string }) {
-  const base = (process.env.OPENAI_API_BASE || 'https://api.openai.com/v1').replace(/\/$/, '');
+    const llmProvider = (process.env.LLM_PROVIDER || '').toLowerCase();
+  const useCopilot = llmProvider === 'copilot';
+  const base = (useCopilot ? (process.env.COPILOT_API_BASE || 'https://models.github.ai/inference') : (process.env.OPENAI_API_BASE || 'https://api.openai.com/v1')).replace(/\/$/, '');
   const url = `${base}/chat/completions`;
-  const model = process.env.OPENAI_SUMMARY_MODEL || 'gpt-4o-mini';
-  const apiKey = process.env.OPENAI_API_KEY;
+  const model = useCopilot ? (process.env.COPILOT_MODEL || process.env.OPENAI_MODEL || 'gpt-4o-mini') : (process.env.OPENAI_MODEL || 'gpt-4o-mini');
+  const apiKey = useCopilot ? process.env.COPILOT_API_KEY : process.env.OPENAI_API_KEY;
 
   const messages = buildSummaryMessages(input);
 
-  console.log('[ai] summarizeAndActionWithLLM calling model=%s url=%s', model, url);
+  console.log('[ai] summarizeAndActionWithLLM calling provider=%s model=%s url=%s', useCopilot ? 'copilot' : 'openai', model, url);
   let res;
   try {
     res = await fetchWithTimeout(url, {
@@ -372,7 +388,7 @@ async function summarizeAndActionWithLLM(input: { subject: string; from: string;
         'Content-Type': 'application/json',
         ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {})
       },
-      body: JSON.stringify({ model, messages, temperature: 0.1 })
+      body: JSON.stringify({ model, messages })// , temperature: 0.1 })
     }, OPENAI_REQUEST_TIMEOUT_MS);
   } catch (fetchErr) {
     console.error('[ai] summarizeAndActionWithLLM fetch error', fetchErr);
@@ -487,7 +503,7 @@ async function runSummaryAction(prisma: PrismaService, messageId: string, aiMeta
           itinerary = ${JSON.stringify(events)}::jsonb,
           tracking = ${JSON.stringify(tracking)}::jsonb,
           model = ${process.env.OPENAI_MODEL || 'gpt-4o-mini'},
-          provider = ${process.env.OPENAI_API_BASE ? 'openai-compatible' : 'openai'},
+          provider = ${LLM_PROVIDER_LABEL},
           raw_response = ${JSON.stringify({ summaryActionResult: result })}::jsonb
       WHERE id = ${aiMetadataId}`;
 

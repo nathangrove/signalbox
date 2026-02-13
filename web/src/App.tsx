@@ -1,8 +1,9 @@
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import Login from './pages/Login'
 import Mail from './pages/Mail/Mail'
+import Dashboard from './pages/Dashboard'
 import { initSocket } from './socket'
-import { getMessage, getMailboxes } from './api'
+import { getMessage, getMailboxes, getDashboard } from './api'
 import AppBar from '@mui/material/AppBar'
 import Toolbar from '@mui/material/Toolbar'
 import Typography from '@mui/material/Typography'
@@ -31,6 +32,22 @@ export default function App(){
   const isMobile = useMediaQuery(outerTheme.breakpoints.down('sm'))
   const [loggedIn, setLoggedIn] = useState(!!localStorage.getItem('access_token'))
 
+  // keep track of current path so navigation updates render without reload
+  const [currentPath, setCurrentPath] = useState<string>(typeof window !== 'undefined' ? window.location.pathname : '/')
+  useEffect(() => {
+    const onPop = () => setCurrentPath(window.location.pathname)
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
+  }, [])
+
+  function navigate(path: string) {
+    try {
+      window.history.pushState({}, '', path)
+      setCurrentPath(path)
+      window.dispatchEvent(new PopStateEvent('popstate'))
+    } catch (_) { window.location.pathname = path }
+  }
+
   const [settingsAnchor, setSettingsAnchor] = useState<null | HTMLElement>(null)
   const [openAccounts, setOpenAccounts] = useState(false)
 
@@ -46,14 +63,41 @@ export default function App(){
   // fetch primary unread count, optionally scoped to an accountId
   async function refreshPrimaryCount(accountId?: string | null) {
     try {
-      const data = await getMailboxes(accountId || undefined)
-      const list = Array.isArray(data) ? data : []
-      let total = 0
-      for (const b of list) {
-        const cc = b.categoryCounts || {}
-        total += Number(cc.primary || 0)
+      if (accountId) {
+        const data = await getMailboxes(accountId || undefined)
+        const list = Array.isArray(data) ? data : []
+        let total = 0
+        for (const b of list) {
+          const cc = b.categoryCounts || {}
+          total += Number(cc.primary || 0)
+        }
+        setPrimaryUnreadCount(total)
+      } else {
+        // For global count, prefer server-side dashboard summary (includes unread per category)
+        try {
+          const d = await getDashboard()
+          let primaryUnread = 0
+          const catObj = d?.countsByCategory || {}
+          for (const [k, v] of Object.entries(catObj || {})) {
+            try {
+              if (String(k).toLowerCase() === 'primary') {
+                primaryUnread += Number((v as any)?.unread || 0)
+              }
+            } catch (_) {}
+          }
+          setPrimaryUnreadCount(primaryUnread)
+        } catch (e) {
+          // fallback to summing mailboxes
+          const data = await getMailboxes(undefined)
+          const list = Array.isArray(data) ? data : []
+          let total = 0
+          for (const b of list) {
+            const cc = b.categoryCounts || {}
+            total += Number(cc.primary || 0)
+          }
+          setPrimaryUnreadCount(total)
+        }
       }
-      setPrimaryUnreadCount(total)
     } catch (e) { console.warn('refresh primary count failed', e) }
   }
 
@@ -211,8 +255,12 @@ export default function App(){
               sx={{ flexGrow: 1, bgcolor: 'background.paper', borderRadius: 1 }}
             />
           ) : (
-            <Box sx={{ flexGrow: 1, display: 'flex', alignItems: 'center' }}>
+            <Box sx={{ flexGrow: 1, display: 'flex', alignItems: 'center', gap: 2 }}>
               <Box component="img" src="/logo-white-text.svg" alt="Signalbox" sx={{ height: 62 }} />
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Button color={currentPath === '/' ? 'secondary' : 'inherit'} onClick={() => navigate('/')}>Mail</Button>
+                <Button color={currentPath.startsWith('/dashboard') ? 'secondary' : 'inherit'} onClick={() => navigate('/dashboard')}>Dashboard</Button>
+              </Box>
             </Box>
           )}
           {loggedIn && (
@@ -227,6 +275,7 @@ export default function App(){
                 anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
                 transformOrigin={{ vertical: 'top', horizontal: 'right' }}
               >
+                <MenuItem onClick={() => { closeSettingsMenu(); window.location.pathname = '/dashboard' }}>Dashboard</MenuItem>
                 <MenuItem>
                   <FormControlLabel
                     control={<Switch checked={mode === 'dark'} onChange={(e) => { const next = e.target.checked ? 'dark' : 'light'; setMode(next); try { localStorage.setItem('theme', next) } catch (_) {} }} />}
@@ -249,7 +298,7 @@ export default function App(){
         </DialogContent>
       </Dialog>
       <Container disableGutters={isMobile} sx={{ mt: isMobile ? 0 : 4, px: isMobile ? 0 : undefined, maxWidth: 'xl', m: isMobile ? 0 : 2 }}>
-        {loggedIn ? <Mail /> : <Login onLogin={onLogin} />}
+        {loggedIn ? (currentPath && currentPath.startsWith('/dashboard') ? <Dashboard /> : <Mail />) : <Login onLogin={onLogin} />}
       </Container>
       </div>
     </ThemeProvider>
