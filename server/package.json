@@ -26,6 +26,7 @@
     "imapflow": "^1.2.7",
     "ioredis": "^5.9.2",
     "mailparser": "^3.9.1",
+    "chrono-node": "^2.3.1",
     "nodemailer": "^6.9.4",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",

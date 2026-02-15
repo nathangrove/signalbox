@@ -35,7 +35,11 @@ export class MessagesService {
         am.labels->>'categoryReason' AS "categoryReason",
         am.labels->>'cold' AS "cold",
         (am.itinerary IS NOT NULL AND jsonb_typeof(am.itinerary) = 'array' AND jsonb_array_length(am.itinerary) > 0) AS "hasItinerary",
-        (am.tracking IS NOT NULL AND jsonb_typeof(am.tracking) = 'array' AND jsonb_array_length(am.tracking) > 0) AS "hasTracking"
+        (am.tracking IS NOT NULL AND jsonb_typeof(am.tracking) = 'array' AND jsonb_array_length(am.tracking) > 0) AS "hasTracking",
+        -- normalize subject by stripping common reply/forward prefixes and compute the newest date in the group
+        regexp_replace(coalesce(m.subject,''), '^(\\s*(re|fw|fwd)(\[[0-9]+\])?:?\\s*)+', '', 'i') AS "normalizedSubject",
+        max(m.internal_date) OVER (PARTITION BY regexp_replace(coalesce(m.subject,''), '^(\\s*(re|fw|fwd)(\[[0-9]+\])?:?\\s*)+', '', 'i')) AS "groupMaxInternalDate",
+        (m.internal_date < max(m.internal_date) OVER (PARTITION BY regexp_replace(coalesce(m.subject,''), '^(\\s*(re|fw|fwd)(\[[0-9]+\])?:?\\s*)+', '', 'i'))) AS "collapsed"
       FROM messages m
       JOIN accounts a ON a.id = m.account_id
       LEFT JOIN ai_metadata am ON am.message_id = m.id AND am.version = 1
@@ -61,7 +65,8 @@ export class MessagesService {
       read: row.read === true,
       archived: row.archived === true,
       hasItinerary: row.hasItinerary === true,
-      hasTracking: row.hasTracking === true
+      hasTracking: row.hasTracking === true,
+      collapsed: row.collapsed === true || row.collapsed === 'true' || row.collapsed === 't'
     }));
   }
 
@@ -85,7 +90,10 @@ export class MessagesService {
         am.labels->>'categoryReason' AS "categoryReason",
         am.labels->>'cold' AS "cold",
         (am.itinerary IS NOT NULL AND jsonb_typeof(am.itinerary) = 'array' AND jsonb_array_length(am.itinerary) > 0) AS "hasItinerary",
-        (am.tracking IS NOT NULL AND jsonb_typeof(am.tracking) = 'array' AND jsonb_array_length(am.tracking) > 0) AS "hasTracking"
+        (am.tracking IS NOT NULL AND jsonb_typeof(am.tracking) = 'array' AND jsonb_array_length(am.tracking) > 0) AS "hasTracking",
+        regexp_replace(coalesce(m.subject,''), '^(\\s*(re|fw|fwd)(\[[0-9]+\])?:?\\s*)+', '', 'i') AS "normalizedSubject",
+        max(m.internal_date) OVER (PARTITION BY regexp_replace(coalesce(m.subject,''), '^(\\s*(re|fw|fwd)(\[[0-9]+\])?:?\\s*)+', '', 'i')) AS "groupMaxInternalDate",
+        (m.internal_date < max(m.internal_date) OVER (PARTITION BY regexp_replace(coalesce(m.subject,''), '^(\\s*(re|fw|fwd)(\[[0-9]+\])?:?\\s*)+', '', 'i'))) AS "collapsed"
       FROM messages m
       JOIN accounts a ON a.id = m.account_id
       LEFT JOIN ai_metadata am ON am.message_id = m.id AND am.version = 1
@@ -180,6 +188,8 @@ export class MessagesService {
   }
 
   async enqueueAiForMessage(userId: string, messageId: string) {
+    const IORedis = require('ioredis');
+    const redis = new IORedis(process.env.REDIS_URL || 'redis://localhost:6379', { maxRetriesPerRequest: null });
     const message = await this.prisma.message.findFirst({
       where: { id: messageId, account: { userId } },
       select: { id: true }
@@ -199,7 +209,21 @@ export class MessagesService {
     if (aiMetadataId) {
       await this.queueService.queues.ai.add('classify-message', { messageId, aiMetadataId }, { attempts: 3, backoff: { type: 'exponential', delay: 2000 }, removeOnComplete: true, removeOnFail: false });
       // also request summary + recommended action
-      await this.queueService.queues['ai-action'].add('summarize-action', { messageId, aiMetadataId }, { removeOnComplete: true, removeOnFail: false });
+      // Use Redis-based idempotency key to avoid duplicate ai-action enqueues
+      const enqueueKey = `ai-action-enqueued:${aiMetadataId}`;
+      try {
+        const setRes = await redis.set(enqueueKey, '1', 'PX', Number(process.env.AI_ACTION_ENQUEUE_TTL_MS || 24 * 60 * 60 * 1000), 'NX');
+        if (setRes === 'OK') {
+          await this.queueService.queues['ai-action'].add('summarize-action', { messageId, aiMetadataId }, { removeOnComplete: true, removeOnFail: false });
+        } else {
+          console.log('[messages.service] skipping ai-action enqueue; already scheduled for aiMetadataId=' + aiMetadataId);
+        }
+      } catch (e) {
+        console.warn('[messages.service] redis idempotency check failed; enqueuing ai-action anyway', (e as any)?.message || e);
+        await this.queueService.queues['ai-action'].add('summarize-action', { messageId, aiMetadataId }, { removeOnComplete: true, removeOnFail: false });
+      } finally {
+        try { await redis.quit(); } catch (_) {}
+      }
     }
 
     return { ok: true };

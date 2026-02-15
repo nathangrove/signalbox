@@ -4,6 +4,7 @@ import { simpleParser } from 'mailparser';
 import { Readable } from 'stream';
 import { buildClassifierMessages, buildSummaryMessages, CATEGORIES } from './ai.prompts';
 import { publishNotification } from '../notifications/redis-pub';
+import chrono from 'chrono-node';
 
 async function classifyWithLocalModel(input: { subject: string; from: string; body: string }) {
   // Build candidate endpoints. Prefer explicit env var; otherwise try docker service then localhost (dev-friendly).
@@ -483,8 +484,29 @@ async function runSummaryAction(prisma: PrismaService, messageId: string, aiMeta
   if (events.length) {
     for (const ev of events) {
       try {
-        const startTs = ev.start ? new Date(ev.start) : null;
-        const endTs = ev.end ? new Date(ev.end) : null;
+        // Normalize start/end values. Support ISO strings or natural language dates returned by LLM.
+        let startTs: Date | null = null;
+        let endTs: Date | null = null;
+        if (ev.start) {
+          const d = new Date(ev.start);
+          if (!Number.isNaN(d.getTime())) startTs = d;
+          else {
+            const parsed = chrono.parseDate(String(ev.start), (message as any).internalDate ? new Date((message as any).internalDate) : new Date());
+            if (parsed && !Number.isNaN(parsed.getTime())) startTs = parsed;
+          }
+        }
+        if (ev.end) {
+          const d2 = new Date(ev.end);
+          if (!Number.isNaN(d2.getTime())) endTs = d2;
+          else {
+            const parsed2 = chrono.parseDate(String(ev.end), (message as any).internalDate ? new Date((message as any).internalDate) : new Date());
+            if (parsed2 && !Number.isNaN(parsed2.getTime())) endTs = parsed2;
+          }
+        }
+        if (!startTs) {
+          console.warn('[ai-action] skipping event without parseable start', ev);
+          continue;
+        }
         const attendees = ev.attendees && Array.isArray(ev.attendees) ? ev.attendees : null;
         await prisma.$queryRaw`
             INSERT INTO events (message_id, ai_metadata_id, start_ts, end_ts, summary, location, attendees, source, created_at)
@@ -507,6 +529,8 @@ async function runSummaryAction(prisma: PrismaService, messageId: string, aiMeta
           raw_response = ${JSON.stringify({ summaryActionResult: result })}::jsonb
       WHERE id = ${aiMetadataId}`;
 
+  // event labeling removed: leave event extraction to summarize prompt
+
   console.log(`[ai-action] ${tag} complete`);
   return { ok: true };
 }
@@ -527,6 +551,19 @@ export const aiActionProcessor = async (job: any) => {
     console.error(`[ai-action] job.${job.id} error`, err);
     throw err;
   } finally {
+    // clear idempotency key so future UI reruns can enqueue again
+    try {
+      const IORedis = require('ioredis');
+      const connection = new IORedis(process.env.REDIS_URL || 'redis://localhost:6379', { maxRetriesPerRequest: null });
+      const { aiMetadataId } = job.data || {};
+      if (aiMetadataId) {
+        const enqueueKey = `ai-action-enqueued:${aiMetadataId}`;
+        await connection.del(enqueueKey);
+      }
+      try { await connection.quit(); } catch (_) {}
+    } catch (e) {
+      console.warn('[ai-action] failed to clear ai-action enqueue key', (e as any)?.message || e);
+    }
     await prisma.$disconnect();
   }
 };

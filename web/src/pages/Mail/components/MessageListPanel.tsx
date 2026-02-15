@@ -52,8 +52,10 @@ export default function MessageListPanel(props: any) {
     pageSize
   } = props
 
+  const [expandedGroups, setExpandedGroups] = React.useState<Record<string, boolean>>({});
+
   // Per-row component so each message can manage its own touch state
-  function MessageRow({ msg }: { msg: any }) {
+  function MessageRow({ msg, groupIndicator }: { msg: any; groupIndicator?: React.ReactNode }) {
     const [tx, setTx] = React.useState(0)
     const [dragging, setDragging] = React.useState(false)
     const startX = React.useRef<number | null>(null)
@@ -132,6 +134,7 @@ export default function MessageListPanel(props: any) {
               onClick={() => { setSelectedMessage(msg); replaceRoute(selectedMailbox?.id || null, null, msg.id); if (isMobile) setMobileView('message') }}
               onContextMenu={(e) => { e.preventDefault(); setContextMenu({ mouseX: e.clientX - 2, mouseY: e.clientY - 4, id: msg.id }) }}
               alignItems="flex-start"
+              style={{ opacity: msg.collapsed ? 0.65 : 1 }}
             >
               <ListItemText
                 primaryTypographyProps={{ fontWeight: !(msg.read === true || (Array.isArray(msg.flags) ? msg.flags.includes('\\Seen') : false)) ? 600 : 400 }}
@@ -157,6 +160,7 @@ export default function MessageListPanel(props: any) {
                   sx={{ ml: 1, textTransform: 'capitalize' }}
                 />
               )}
+              {groupIndicator ? <Box sx={{ ml: 1, display: 'flex', alignItems: 'center' }}>{groupIndicator}</Box> : null}
               {msg.hasItinerary && (
                 <Chip label="Event" size="small" color="info" sx={{ ml: 1 }} />
               )}
@@ -219,11 +223,52 @@ export default function MessageListPanel(props: any) {
             return order.map(section => {
               const list = groupedMessagesByDate[section.key] || []
               if (!list.length) return null
+
+              // build groups keyed by normalized subject
+              const groups: Record<string, any[]> = {}
+              for (const m of list) {
+                const key = (m.normalizedSubject || m.subject || '').trim() || '__no_subject__'
+                groups[key] = groups[key] || []
+                groups[key].push(m)
+              }
+
               return (
                 <React.Fragment key={section.key}>
                   <ListSubheader sx={{ bgcolor: 'transparent', mt: 1, pl: 0, fontWeight: 600 }}>{section.label}</ListSubheader>
-                  {list.map((msg: any) => {
-                    return <MessageRow key={msg.id} msg={msg} />
+
+                  {Object.entries(groups).map(([key, group]) => {
+                    group.sort((a: any, b: any) => {
+                      const av = a.internalDate ? new Date(a.internalDate).getTime() : 0
+                      const bv = b.internalDate ? new Date(b.internalDate).getTime() : 0
+                      return bv - av
+                    })
+
+                    const representative = group[0]
+                    const collapsedCount = group.length - 1
+                    const expanded = !!expandedGroups[key]
+
+                    if (!expanded) {
+                      const indicator = collapsedCount > 0 ? (
+                        <Chip
+                          label={`+${collapsedCount}`}
+                          size="small"
+                          onClick={(e) => { e.stopPropagation(); setExpandedGroups(prev => ({ ...prev, [key]: true })) }}
+                          sx={{ ml: 1, cursor: 'pointer' }}
+                        />
+                      ) : null
+
+                      return (
+                        <React.Fragment key={key}>
+                          <MessageRow key={representative.id} msg={representative} groupIndicator={indicator} />
+                        </React.Fragment>
+                      )
+                    }
+
+                    return (
+                      <React.Fragment key={key}>
+                        {group.map((m: any) => <MessageRow key={m.id} msg={m} />)}
+                      </React.Fragment>
+                    )
                   })}
                 </React.Fragment>
               )
