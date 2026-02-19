@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from 'react'
+import * as React from 'react'
+import { useEffect, useState } from 'react'
 import { getDashboard } from '../api'
 import Box from '@mui/material/Box'
 import Paper from '@mui/material/Paper'

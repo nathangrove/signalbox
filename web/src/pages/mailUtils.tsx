@@ -1,4 +1,4 @@
-import React from 'react'
+import * as React from 'react'
 import { isValid, parse } from 'date-fns'
 import Tooltip from '@mui/material/Tooltip'
 

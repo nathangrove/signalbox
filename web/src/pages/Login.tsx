@@ -1,4 +1,5 @@
-import React, { useState } from 'react'
+import * as React from 'react'
+import { useState } from 'react'
 import { login, register } from '../api'
 import Box from '@mui/material/Box'
 import TextField from '@mui/material/TextField'

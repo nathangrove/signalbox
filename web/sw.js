@@ -21,16 +21,86 @@ self.addEventListener('activate', (event) => {
     ))
   );
   self.clients.claim();
+
+  // Notify all controlled clients that a new service worker has activated.
+  // Pages can reload in response to this message to get the new content.
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(clients => {
+      for (const client of clients) {
+        try {
+          client.postMessage({ type: 'NEW_VERSION_ACTIVATED' });
+        } catch (e) {
+          // ignore
+        }
+      }
+
+      // Show a system notification so backgrounded PWAs receive an immediate alert.
+      // Browsers will ignore this if Notification permission is denied.
+      try {
+        if (self.registration && self.registration.showNotification) {
+          return self.registration.showNotification('Signalbox updated', {
+            body: 'A new version is available — tap to open.',
+            tag: 'app-update',
+            renotify: true,
+            data: { url: '/' },
+            icon: '/icons/icon-192.svg'
+          });
+        }
+      } catch (e) {
+        // ignore notification errors
+      }
+    })
+  );
+});
+
+// Allow the page to send a message to the SW to skip waiting and activate immediately.
+self.addEventListener('message', (event) => {
+  if (!event.data) return;
+  if (event.data.type === 'SKIP_WAITING') {
+    self.skipWaiting();
+  }
+});
+
+// Handle notification click to focus or open the app.
+self.addEventListener('notificationclick', (event) => {
+  const notif = event.notification;
+  const url = (notif && notif.data && notif.data.url) ? notif.data.url : '/';
+  notif.close();
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => {
+      for (const client of list) {
+        try {
+          if (client.url === url && 'focus' in client) return client.focus();
+        } catch (e) {
+          // ignore
+        }
+      }
+      if (self.clients.openWindow) return self.clients.openWindow(url);
+    })
+  );
 });
 
 self.addEventListener('fetch', (event) => {
   const req = event.request;
   const url = new URL(req.url);
 
-  // API requests: try network first, fallback to cache
-  if (url.pathname.startsWith('/api/')) {
+  // API requests: try network first, fallback to cache.
+  // Support both /api/ and /v1/ prefixes and treat requests that accept JSON as API calls.
+  if (
+    url.pathname.startsWith('/api/') ||
+    url.pathname.startsWith('/v1/') ||
+    req.headers.get('accept')?.includes('application/json')
+  ) {
     event.respondWith(
-      fetch(req).catch(() => caches.match(req))
+      fetch(req).then(res => {
+        try {
+          const copy = res.clone();
+          caches.open(CACHE_NAME).then(c => c.put(req, copy));
+        } catch (e) {
+          // ignore caching errors for API responses
+        }
+        return res;
+      }).catch(() => caches.match(req))
     );
     return;
   }

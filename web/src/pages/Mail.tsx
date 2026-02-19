@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import * as React from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { API_BASE } from '../api'
 import ReactQuill from 'react-quill'
 import 'react-quill/dist/quill.snow.css'
@@ -8,6 +9,7 @@ import { initSocket } from '../socket'
 import Box from '@mui/material/Box'
 import Paper from '@mui/material/Paper'
 import Typography from '@mui/material/Typography'
+import Collapse from '@mui/material/Collapse'
 import FormControl from '@mui/material/FormControl'
 import InputLabel from '@mui/material/InputLabel'
 import Select from '@mui/material/Select'
@@ -659,6 +661,7 @@ export default function Mail(){
   const [composerBody, setComposerBody] = useState('')
   const [composerRich, setComposerRich] = useState(true)
   const [inlineReplyOpen, setInlineReplyOpen] = useState(false)
+  const [aiSummaryOpen, setAiSummaryOpen] = useState(false)
 
   const fabBottom = composerOpen ? (isMobile ? 'calc(70vh + 30px)' : 460) : 20
 
@@ -1113,12 +1116,19 @@ export default function Mail(){
               </Box>
 
               {messageDetail.aiSummary && (
-                <Box sx={{ mt: 1, mb: 2, p: 1.5, borderRadius: 1, bgcolor: (t) => t.palette.mode === 'dark' ? 'rgba(255,255,255,0.02)' : 'rgba(234,245,255,0.7)', border: (t) => `1px solid ${t.palette.mode === 'dark' ? 'rgba(255,255,255,0.03)' : 'rgba(26,115,232,0.08)'}` }}>
-                  <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
-                    <Typography variant="subtitle2">AI Summary</Typography>
-                  </Box>
-                  <Box component="ul" sx={{ pl: 2, m: 0 }}>
+                <Box sx={{ mt: 1, mb: 2 }}>
+                  <Box sx={{ p: 1.5, borderRadius: 1, bgcolor: (t) => t.palette.mode === 'dark' ? 'rgba(255,255,255,0.02)' : 'rgba(234,245,255,0.7)', border: (t) => `1px solid ${t.palette.mode === 'dark' ? 'rgba(255,255,255,0.03)' : 'rgba(26,115,232,0.08)'}` }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
+                      <Typography variant="subtitle2">AI Summary</Typography>
+                      <IconButton size="small" onClick={() => setAiSummaryOpen(s => !s)} sx={{ transform: aiSummaryOpen ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }}>
+                        <ArrowDropDownIcon />
+                      </IconButton>
+                    </Box>
+                    <Collapse in={aiSummaryOpen}>
+                      <Box component="ul" sx={{ pl: 2, m: 0 }}>
                         <Typography variant="body2" sx={{ display: 'inline' }}>{messageDetail.aiSummary}</Typography>
+                      </Box>
+                    </Collapse>
                   </Box>
                 </Box>
               )}

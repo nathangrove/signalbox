@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from 'react'
+import * as React from 'react'
+import { useEffect, useState } from 'react'
 import Login from './pages/Login'
 import Mail from './pages/Mail/Mail'
 import Dashboard from './pages/Dashboard'
@@ -231,6 +232,32 @@ export default function App(){
   function handleOpenAccounts() { closeSettingsMenu(); setOpenAccounts(true) }
   function handleCloseAccounts() { setOpenAccounts(false) }
 
+  async function checkForUpdates() {
+    try {
+      if (!('serviceWorker' in navigator)) return alert('Service worker not available');
+      const reg = await navigator.serviceWorker.getRegistration();
+      if (!reg) return alert('No service worker registration found');
+      // If there's a waiting worker, ask it to skip waiting and let controllerchange listener reload the page
+      if (reg.waiting) {
+        reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+        alert('Update activating — the app will reload when ready.');
+        return;
+      }
+      // Otherwise, try to update (will fetch a new SW if available)
+      await reg.update();
+      // If a new worker is now waiting, trigger skipWaiting
+      if (reg.waiting) {
+        reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+        alert('Update activating — the app will reload when ready.');
+        return;
+      }
+      alert('No update found');
+    } catch (e) {
+      console.warn('checkForUpdates failed', e);
+      alert('Update check failed');
+    }
+  }
+
   return (
     <ThemeProvider theme={appTheme}>
       <CssBaseline />
@@ -283,6 +310,7 @@ export default function App(){
                   />
                 </MenuItem>
                 <MenuItem onClick={handleOpenAccounts}>Accounts</MenuItem>
+                <MenuItem onClick={() => { closeSettingsMenu(); checkForUpdates(); }}>Check for updates</MenuItem>
                 <MenuItem onClick={() => { closeSettingsMenu(); /* placeholder for other settings */ }}>Preferences</MenuItem>
                 <MenuItem onClick={() => { closeSettingsMenu(); logout(); }}>Logout</MenuItem>
               </Menu>

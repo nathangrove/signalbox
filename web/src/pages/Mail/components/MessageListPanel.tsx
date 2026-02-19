@@ -1,4 +1,5 @@
-import React from 'react'
+import * as React from 'react'
+import { useState, useRef } from 'react'
 import Paper from '@mui/material/Paper'
 import Typography from '@mui/material/Typography'
 import TextField from '@mui/material/TextField'
@@ -52,14 +53,14 @@ export default function MessageListPanel(props: any) {
     pageSize
   } = props
 
-  const [expandedGroups, setExpandedGroups] = React.useState<Record<string, boolean>>({});
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
 
   // Per-row component so each message can manage its own touch state
   function MessageRow({ msg, groupIndicator }: { msg: any; groupIndicator?: React.ReactNode }) {
-    const [tx, setTx] = React.useState(0)
-    const [dragging, setDragging] = React.useState(false)
-    const startX = React.useRef<number | null>(null)
-    const startY = React.useRef<number | null>(null)
+    const [tx, setTx] = useState(0)
+    const [dragging, setDragging] = useState(false)
+    const startX = useRef<number | null>(null)
+    const startY = useRef<number | null>(null)
     const threshold = 80 // px to trigger toggle
 
     const onTouchStart = (e: React.TouchEvent) => {

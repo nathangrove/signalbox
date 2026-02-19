@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import * as React from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { API_BASE } from '../../api'
 import ReactQuill from 'react-quill'
 import 'react-quill/dist/quill.snow.css'
@@ -8,6 +9,7 @@ import { initSocket } from '../../socket'
 import Box from '@mui/material/Box'
 import Paper from '@mui/material/Paper'
 import Typography from '@mui/material/Typography'
+import Collapse from '@mui/material/Collapse'
 import FormControl from '@mui/material/FormControl'
 import InputLabel from '@mui/material/InputLabel'
 import Select from '@mui/material/Select'
@@ -24,6 +26,8 @@ import Drawer from '@mui/material/Drawer'
 import { useTheme } from '@mui/material/styles'
 import useMediaQuery from '@mui/material/useMediaQuery'
 import ArrowBackIcon from '@mui/icons-material/ArrowBack'
+import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown'
+import MoreVertIcon from '@mui/icons-material/MoreVert'
 import LaunchIcon from '@mui/icons-material/Launch'
 import Menu from '@mui/material/Menu'
 import MenuItem from '@mui/material/MenuItem'
@@ -685,6 +689,8 @@ export default function Mail(){
   const [composerBody, setComposerBody] = useState('')
   const [composerRich, setComposerRich] = useState(true)
   const [inlineReplyOpen, setInlineReplyOpen] = useState(false)
+  const [aiSummaryOpen, setAiSummaryOpen] = useState(false)
+  const [mobileActionsAnchor, setMobileActionsAnchor] = useState<HTMLElement | null>(null)
 
   const fabBottom = composerOpen ? (isMobile ? 'calc(70vh + 30px)' : 460) : 20
 
@@ -1186,16 +1192,19 @@ export default function Mail(){
           try { await handleCategoryArchiveAll(target) } catch (e) { console.warn('archive all failed', e) }
         }}>Archive all</MenuItem>
       </Menu>
-      <Paper sx={{ p: 2, overflowY: 'hidden', overflowX: 'hidden', display: isMobile && mobileView !== 'message' ? 'none' : 'flex', flexDirection: 'column' }}>
+      <Paper sx={{ p: 2, overflowY: isMobile && mobileView === 'message' ? 'auto' : 'hidden', overflowX: 'hidden', display: isMobile && mobileView !== 'message' ? 'none' : 'flex', flexDirection: 'column', maxHeight: isMobile && mobileView === 'message' ? `calc(100vh - ${headerHeight}px)` : undefined }}>
         {loadingMessage && <CircularProgress size={24} />}
         {!loadingMessage && messageDetail && (
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, flex: 1, minHeight: 0 }}>
             {isMobile ? (
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, width: '100%' }}>
                 <IconButton size="small" onClick={() => { setSelectedMessage(null); setMessageDetail(null); setMobileView('list'); replaceRoute(selectedMailbox?.id || null, selectedCategory || null, null) }}>
                   <ArrowBackIcon />
                 </IconButton>
-                <Typography variant="h6" sx={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{messageDetail.subject || '(no subject)'}</Typography>
+                <Typography variant="subtitle1" sx={{ overflow: 'hidden', textOverflow: 'ellipsis', fontSize: '1rem', fontWeight: 600, flex: 1 }}>{messageDetail.subject || '(no subject)'}</Typography>
+                <IconButton size="small" onClick={(e) => setMobileActionsAnchor(e.currentTarget)}>
+                  <MoreVertIcon />
+                </IconButton>
               </Box>
             ) : (
               <Typography variant="h6">{messageDetail.subject || '(no subject)'}</Typography>
@@ -1212,48 +1221,90 @@ export default function Mail(){
                 <Typography variant="caption" color="text.secondary">{formatDate(messageDetail.internalDate)}</Typography>
               </Box>
 
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 }}>
-                <Typography variant="body2" color="text.secondary" sx={{ alignItems: 'center' }}>To: {formatRecipientsElements(messageDetail.toHeader || messageDetail.to)}</Typography>
-              </Box>
+              {!isMobile && (
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 }}>
+                  <Typography variant="body2" color="text.secondary" sx={{ alignItems: 'center' }}>To: {formatRecipientsElements(messageDetail.toHeader || messageDetail.to)}</Typography>
+                </Box>
+              )}
 
               {messageDetail.aiSummary && (
-                <Box sx={{ mt: 1, mb: 2, p: 1.5, borderRadius: 1, bgcolor: (t) => t.palette.mode === 'dark' ? 'rgba(255,255,255,0.02)' : 'rgba(234,245,255,0.7)', border: (t) => `1px solid ${t.palette.mode === 'dark' ? 'rgba(255,255,255,0.03)' : 'rgba(26,115,232,0.08)'}` }}>
-                  <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
-                    <Typography variant="subtitle2">AI Summary</Typography>
-                  </Box>
-                  <Box component="ul" sx={{ pl: 2, m: 0 }}>
+                <Box sx={{ mt: 1, mb: 2 }}>
+                  <Box sx={{ p: 1.5, borderRadius: 1, bgcolor: (t) => t.palette.mode === 'dark' ? 'rgba(255,255,255,0.02)' : 'rgba(234,245,255,0.7)', border: (t) => `1px solid ${t.palette.mode === 'dark' ? 'rgba(255,255,255,0.03)' : 'rgba(26,115,232,0.08)'}` }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
+                      <Typography variant="subtitle2">AI Summary</Typography>
+                      <IconButton size="small" onClick={() => setAiSummaryOpen(s => !s)} sx={{ transform: aiSummaryOpen ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }}>
+                        <ArrowDropDownIcon />
+                      </IconButton>
+                    </Box>
+                    <Collapse in={aiSummaryOpen}>
+                      <Box component="ul" sx={{ pl: 2, m: 0 }}>
                         <Typography variant="body2" sx={{ display: 'inline' }}>{messageDetail.aiSummary}</Typography>
+                      </Box>
+                    </Collapse>
                   </Box>
                 </Box>
               )}
 
               <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap', mt: 1, width: '100%' }}>
-                <FormControl size="small" sx={{ minWidth: 140 }}>
-                  <InputLabel id="message-category-select">Category</InputLabel>
-                  <Select
-                    labelId="message-category-select"
-                    value={messageDetail.category || ''}
-                    label="Category"
-                    onChange={(e: any) => handleUpdateMessageCategory(e.target.value || null)}
-                  >
-                    <MenuItem value="">None</MenuItem>
-                    {['primary','updates','social','newsletters','promotions','other'].map(c => (
-                      <MenuItem key={c} value={c}>{c}</MenuItem>
-                    ))}
-                  </Select>
-                </FormControl>
+                {!isMobile && (
+                  <>
+                    <FormControl size="small" sx={{ minWidth: 140 }}>
+                      <InputLabel id="message-category-select">Category</InputLabel>
+                      <Select
+                        labelId="message-category-select"
+                        value={messageDetail.category || ''}
+                        label="Category"
+                        onChange={(e: any) => handleUpdateMessageCategory(e.target.value || null)}
+                      >
+                        <MenuItem value="">None</MenuItem>
+                        {['primary','updates','social','newsletters','promotions','other'].map(c => (
+                          <MenuItem key={c} value={c}>{c}</MenuItem>
+                        ))}
+                      </Select>
+                    </FormControl>
 
-                <Box sx={{ ml: 'auto', display: 'flex', gap: 1 }}>
-                  <IconButton size="small" onClick={handleToggleSpam} title={messageDetail.spam ? 'Mark not spam' : 'Mark spam'}>
-                    <ReportIcon color={messageDetail.spam ? 'error' : 'inherit'} />
-                  </IconButton>
-                  <IconButton size="small" onClick={openForward} title="Forward">
-                    <ForwardIcon />
-                  </IconButton>
-                  <IconButton size="small" onClick={openReply} title="Reply">
-                    <ReplyIcon />
-                  </IconButton>
-                </Box>
+                    <Box sx={{ ml: 'auto', display: 'flex', gap: 1 }}>
+                      <IconButton size="small" onClick={handleToggleSpam} title={messageDetail.spam ? 'Mark not spam' : 'Mark spam'}>
+                        <ReportIcon color={messageDetail.spam ? 'error' : 'inherit'} />
+                      </IconButton>
+                      <IconButton size="small" onClick={openForward} title="Forward">
+                        <ForwardIcon />
+                      </IconButton>
+                      <IconButton size="small" onClick={openReply} title="Reply">
+                        <ReplyIcon />
+                      </IconButton>
+                    </Box>
+                  </>
+                )}
+              </Box>
+
+              <Menu anchorEl={mobileActionsAnchor} open={Boolean(mobileActionsAnchor)} onClose={() => setMobileActionsAnchor(null)}>
+                <MenuItem>
+                  <FormControl fullWidth size="small">
+                    <InputLabel id="mobile-message-category-select">Category</InputLabel>
+                    <Select
+                      labelId="mobile-message-category-select"
+                      value={messageDetail.category || ''}
+                      label="Category"
+                      onChange={(e: any) => { handleUpdateMessageCategory(e.target.value || null); setMobileActionsAnchor(null); }}
+                    >
+                      <MenuItem value="">None</MenuItem>
+                      {['primary','updates','social','newsletters','promotions','other'].map(c => (
+                        <MenuItem key={c} value={c}>{c}</MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
+                </MenuItem>
+                <MenuItem onClick={() => { handleToggleSpam(); setMobileActionsAnchor(null); }}>{messageDetail.spam ? 'Mark not spam' : 'Mark spam'}</MenuItem>
+                <MenuItem onClick={() => { openReply(); setMobileActionsAnchor(null); }}>Reply</MenuItem>
+                <MenuItem onClick={() => { openForward(); setMobileActionsAnchor(null); }}>Forward</MenuItem>
+                { !imagesAllowed && sanitizedHtml.blockedCount > 0 && (
+                  <MenuItem onClick={() => { allowImagesForThisMessage(); setMobileActionsAnchor(null); }}>Load images</MenuItem>
+                )}
+                { senderAddress && !allowImagesForSender[senderAddress] && (
+                  <MenuItem onClick={() => { allowImagesForThisSender(); setMobileActionsAnchor(null); }}>Always allow from {senderAddress}</MenuItem>
+                )}
+              </Menu>
 
                 {parsedAiItinerary && parsedAiItinerary.length > 0 && (
                   <Box sx={{ mt: 1, width: '100%' }}>
@@ -1323,11 +1374,11 @@ export default function Mail(){
                   </Box>
                 )}
               </Box>
-            </Box>
 
-            <Divider />
+            <Box>
+              <Divider />
               {messageDetail.html ? (
-              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, flex: 1, minHeight: 0, overflow: 'hidden' }}>
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, flex: 1, minHeight: 0, overflow: 'hidden' }}>
                 {!imagesAllowed && sanitizedHtml.blockedCount > 0 && (
                   <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
                     <Typography variant="body2" color="text.secondary">
@@ -1343,11 +1394,12 @@ export default function Mail(){
                 </Box>
               </Box>
               ) : (
-              /* Thread-splitting temporarily disabled — render plain text as a single block */
-              <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
-                <Typography variant="body1" sx={{ whiteSpace: 'pre-wrap', p: 1 }}>{messageDetail.text || ''}</Typography>
+                /* Thread-splitting temporarily disabled — render plain text as a single block */
+                <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+                  <Typography variant="body1" sx={{ whiteSpace: 'pre-wrap', p: 1 }}>{messageDetail.text || ''}</Typography>
+                </Box>
+              )}
               </Box>
-            )}
             {/* Inline reply composer (compact) */}
             {inlineReplyOpen && (
               <Box sx={{ display: 'flex', gap: 1, alignItems: 'flex-start', mt: 2 }}>
